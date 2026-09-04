@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>WAITSI — the waiting layer for AI</title>
+<link rel="preconnect" href="https://api.fontshare.com" crossorigin />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&f[]=general-sans@400,500,600&display=swap" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;500;700&display=swap" />
+<style>
+:root{
+  --ink:#0B0E0C; --ink-2:#111612; --ink-3:#161D17;
+  --line:#222C23; --line-2:#2E3A2E;
+  --sprout:#B8FF4F; --verdant:#2DD4BF; --rum:#FFC248;
+  --text:#E9F3E3; --text-2:#9CA98F; --text-3:#5C6A55;
+  --danger:#FF6B6B;
+  --ease:cubic-bezier(0.16,1,0.3,1);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--ink);color:var(--text);font-family:'General Sans',sans-serif;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body{min-height:100vh;position:relative;overflow-x:hidden}
+/* faint grid backdrop */
+body::before{content:"";position:fixed;inset:0;z-index:-2;
+  background-image:radial-gradient(var(--line) 1px,transparent 1px);
+  background-size:26px 26px;opacity:.5}
+body::after{content:"";position:fixed;top:-18%;left:50%;transform:translateX(-50%);
+  width:120vw;height:90vh;z-index:-1;pointer-events:none;
+  background:radial-gradient(closest-side at 50% 42%, rgba(184,255,79,.10), transparent 70%);
+  filter:blur(2px)}
+#app{max-width:1120px;margin:0 auto;padding:24px 20px 80px}
+
+@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@keyframes riseUp{from{opacity:0;transform:translateY(8px) scale(.98)}to{opacity:1;transform:none}}
+@keyframes breath{0%,100%{transform:scale(1);opacity:.85}50%{transform:scale(1.035);opacity:1}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes flashbg{0%{background:rgba(184,255,79,.10)}100%{background:transparent}}
+.stagger>*{opacity:0;animation:rise .6s var(--ease) both}
+.stagger>*:nth-child(1){animation-delay:.05s}.stagger>*:nth-child(2){animation-delay:.12s}
+.stagger>*:nth-child(3){animation-delay:.19s}.stagger>*:nth-child(4){animation-delay:.26s}
+.stagger>*:nth-child(5){animation-delay:.33s}
+
+/* ---- header ---- */
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:14px 18px;border:1px solid var(--line);border-radius:16px;
+  background:linear-gradient(180deg,rgba(22,29,23,.85),rgba(11,14,12,.85));
+  backdrop-filter:blur(6px);margin-bottom:22px;position:sticky;top:14px;z-index:40}
+.logo{display:flex;align-items:center;gap:10px;font-family:'Clash Display',sans-serif;
+  font-weight:700;font-size:20px;letter-spacing:.02em}
+.logo .dot{width:10px;height:10px;border-radius:50%;background:var(--sprout);box-shadow:0 0 14px var(--sprout);animation:breath 2.4s ease-in-out infinite}
+.logo .tag{color:var(--text-3);font-weight:500;font-size:12px;letter-spacing:.18em;text-transform:uppercase}
+.hstatus{display:flex;align-items:center;gap:8px;font-family:'Space Mono',monospace;font-size:12px;color:var(--text-2);
+  padding:7px 12px;border:1px solid var(--line);border-radius:999px;background:var(--ink-2)}
+.hstatus .pulse{width:8px;height:8px;border-radius:50%;background:var(--text-3);transition:.3s}
+.hstatus.live .pulse{background:var(--sprout);box-shadow:0 0 10px var(--sprout);animation:breath 1.6s ease-in-out infinite}
+.hstatus.live{color:var(--text)}
+.handle-chip{font-family:'Space Mono',monospace;font-size:12px;color:var(--verdant);padding:7px 12px;border:1px solid var(--line);border-radius:999px;background:var(--ink-2);display:none}
+
+/* ---- buttons + inputs ---- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;
+  font-family:'General Sans',sans-serif;font-weight:600;font-size:16px;letter-spacing:.01em;
+  padding:15px 26px;border-radius:14px;border:none;cursor:pointer;transition:transform .18s var(--ease),box-shadow .18s var(--ease),background .18s;
+  text-decoration:none}
+.btn:active{transform:scale(.98)}
+.btn-primary{background:var(--sprout);color:#10200a}
+.btn-primary:hover{box-shadow:0 10px 30px rgba(184,255,79,.35);transform:translateY(-1px)}
+.btn-primary:disabled{opacity:.5;cursor:not-allowed;transform:none;box-shadow:none}
+.btn-ghost{background:transparent;color:var(--text);border:1px solid var(--line-2)}
+.btn-ghost:hover{border-color:var(--sprout);color:var(--sprout)}
+.field{display:flex;flex-direction:column;gap:7px;flex:1;min-width:200px}
+.field label{font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3)}
+.field input{background:var(--ink-2);border:1px solid var(--line);border-radius:12px;
+  padding:14px 15px;color:var(--text);font-family:'Space Mono',monospace;font-size:14px;transition:border-color .2s,border-color .2s}
+.field input:focus{outline:none;border-color:var(--verdant);box-shadow:0 0 0 3px rgba(45,212,191,.15)}
+.field input::placeholder{color:var(--text-3)}
+
+/* ---- entry / hero ---- */
+.hero{text-align:center;padding:44px 8px 32px}
+.badge{display:inline-flex;align-items:center;gap:8px;font-size:12px;font-weight:600;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--verdant);border:1px solid var(--line);
+  padding:8px 14px;border-radius:999px;background:var(--ink-2);margin-bottom:20px}
+.hero h1{font-family:'Clash Display',sans-serif;font-weight:700;font-size:clamp(38px,6.4vw,64px);
+  line-height:1.02;letter-spacing:-.02em;margin-bottom:14px}
+.hero h1 .hl{color:var(--sprout)}
+.hero .sub{color:var(--text-2);font-size:clamp(16px,2.2vw,18px);max-width:560px;margin:0 auto 6px;line-height:1.5}
+.hero .sup{color:var(--text-3);font-size:14px;max-width:520px;margin:0 auto}
+.entry{max-width:680px;margin:26px auto 0;display:flex;flex-direction:column;gap:14px;
+  background:var(--ink-2);border:1px solid var(--line);border-radius:20px;padding:22px}
+.entry .row{display:flex;gap:12px;flex-wrap:wrap}
+.entry .btn{margin-top:4px}
+.teach{margin:18px auto 0;max-width:660px;display:flex;align-items:center;gap:10px;
+  padding:11px 15px;border:1px dashed var(--line-2);border-radius:12px;
+  color:var(--text-2);font-size:13px;line-height:1.4}
+.teach .lab{font-family:'Space Mono',monospace;font-weight:700;color:var(--sprout);letter-spacing:.08em;font-size:11px;white-space:nowrap}
+
+/* ---- surface / states ---- */
+.surface{display:none}
+.state-box{max-width:680px;margin:44px auto 0;text-align:center;padding:46px 22px;
+  background:var(--ink-2);border:1px solid var(--line);border-radius:24px}
+.spinner{width:34px;height:34px;border-radius:50%;border:3px solid var(--line-2);border-top-color:var(--sprout);
+  margin:0 auto 16px;animation:spin .8s linear infinite}
+.state-box h3{font-family:'Clash Display',sans-serif;font-size:22px;margin-bottom:6px}
+.state-box p{color:var(--text-2);font-size:14px;line-height:1.5}
+
+/* ---- live wait surface ---- */
+.live-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;flex-wrap:wrap}
+.now-waiting{font-family:'Clash Display',sans-serif;font-size:22px;font-weight:600}
+.now-waiting em{color:var(--sprout);font-style:normal}
+.pill{font-family:'Space Mono',monospace;font-size:12px;padding:7px 13px;border-radius:999px;border:1px solid var(--line);background:var(--ink-2);color:var(--text-2)}
+.pill .inv{color:var(--verdant)}
+
+.howto{display:flex;align-items:center;gap:10px;margin-bottom:18px;padding:11px 15px;
+  border:1px dashed var(--line-2);border-radius:12px;color:var(--text-2);font-size:13px;line-height:1.4}
+.howto .lab{font-family:'Space Mono',monospace;font-weight:700;color:var(--sprout);letter-spacing:.08em;font-size:11px;white-space:nowrap}
+.howto b{color:var(--text)}
+
+.grid{display:grid;grid-template-columns:1.35fr 1fr;gap:18px;align-items:start}
+.card{background:var(--ink-2);border:1px solid var(--line);border-radius:22px;padding:22px;position:relative;overflow:hidden}
+.card h4{font-size:11px;font-weight:700;letter-spacing:.16em;text-transform:uppercase;color:var(--text-3);margin-bottom:16px}
+
+/* world card */
+.world{display:flex;flex-direction:column;gap:18px}
+.core-wrap{display:flex;align-items:center;justify-content:center;position:relative;padding:14px 0}
+.core-ring{position:absolute;width:200px;height:200px;border-radius:50%;
+  border:1px solid rgba(184,255,79,.18);border-top-color:var(--sprout);
+  animation:spin 7s linear infinite}
+.core-ring.r2{width:240px;height:240px;border-color:rgba(184,255,79,.08);border-bottom-color:var(--verdant);animation-direction:reverse;animation-duration:11s}
+.core{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  width:118px;height:118px;border-radius:50%;
+  background:radial-gradient(circle at 35% 30%,#1c2a14,#0e150d 60%);
+  border:1px solid var(--line-2);box-shadow:0 0 40px rgba(184,255,79,.18),inset 0 0 30px rgba(184,255,79,.06);
+  transition:box-shadow .6s var(--ease)}
+.core .lvl{font-family:'Clash Display',sans-serif;font-weight:700;font-size:34px;line-height:1;color:var(--sprout)}
+.core .lvl span{font-size:15px;color:var(--text-3);font-family:'Space Mono',monospace;margin-left:2px}
+.core .pct{font-family:'Space Mono',monospace;font-size:11px;color:var(--text-2);margin-top:5px}
+.core.flash{animation:flashbg .9s ease}
+.world-meta{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.met{background:var(--ink-3);border:1px solid var(--line);border-radius:14px;padding:14px}
+.met .k{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);margin-bottom:5px}
+.met .v{font-family:'Space Mono',monospace;font-size:22px;font-weight:700;color:var(--text)}
+.met .v.rum{color:var(--rum)} .met .v.sprout{color:var(--sprout)} .met .v.verd{color:var(--verdant)}
+.met .d{font-size:11px;color:var(--text-3);margin-top:2px}
+.vine{background:var(--ink-3);border:1px solid var(--line);border-radius:14px;padding:16px}
+.vine .top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:9px;gap:10px}
+.vine .top .lab{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3)}
+.vine .top .n{font-family:'Space Mono',monospace;font-size:14px;color:var(--sprout)}
+.track{height:12px;border-radius:999px;background:var(--ink);border:1px solid var(--line);overflow:hidden}
+.fill{height:100%;width:0%;border-radius:999px;background:linear-gradient(90deg,var(--verdant),var(--sprout));
+  transition:width .6s var(--ease);box-shadow:0 0 14px rgba(184,255,79,.4)}
+.scene{margin-top:14px;background:var(--ink-3);border:1px solid var(--line);border-radius:14px;padding:14px;position:relative}
+.scene .lab{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);margin-bottom:5px}
+.scene .txt{font-family:'Space Mono',monospace;color:var(--verdant);font-size:14px;line-height:1.45}
+.logfeed{margin-top:2px;display:flex;flex-direction:column;gap:0}
+.logline{display:flex;gap:9px;align-items:baseline;font-family:'Space Mono',monospace;font-size:12px;color:var(--text-2);padding:4px 0;opacity:.9}
+.logline .t{color:var(--text-3);font-size:11px}
+.logline .g.val{color:var(--sprout)} .logline .r.val{color:var(--rum)}
+
+/* sponsor card */
+.sponsor{display:flex;flex-direction:column;gap:14px}
+.sponsor .sp-tag{display:inline-flex;align-items:center;gap:7px;font-family:'Space Mono',monospace;
+  font-size:11px;font-weight:700;letter-spacing:.14em;color:var(--rum);
+  border:1px solid rgba(255,194,72,.35);background:rgba(255,194,72,.08);
+  padding:6px 11px;border-radius:999px;width:fit-content}
+.sponsor .sp-tag::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--rum);animation:breath 1.6s ease-in-out infinite}
+.sponsor .sp-name{font-family:'Clash Display',sans-serif;font-weight:600;font-size:26px;line-height:1.1;color:var(--text)}
+.sponsor .sp-title{color:var(--text-2);font-size:15px;line-height:1.5;margin-top:2px}
+.sponsor .sp-surface{margin-top:2px;font-family:'Space Mono',monospace;font-size:13px;color:var(--verdant)}
+.divider{height:1px;background:var(--line);margin:4px 0}
+.earn{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;
+  background:var(--ink-3);border:1px solid var(--line);border-radius:14px}
+.earn .lab{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3)}
+.earn .amt{font-family:'Space Mono',monospace;font-size:20px;font-weight:700;color:var(--rum)}
+.earn .amt small{font-size:12px;color:var(--text-3);font-weight:400}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.split .met .v{font-size:16px}
+.cta-row{display:flex;gap:10px;margin-top:6px;flex-wrap:wrap}
+.bank-line{margin-top:12px;font-size:12px;color:var(--text-3);display:flex;gap:8px;align-items:center}
+
+/* complete summary */
+.sum{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin:18px 0}
+.lead{background:var(--ink-3);border:1px solid var(--line);border-radius:14px;padding:14px;text-align:center}
+.lead .big{font-family:'Clash Display',sans-serif;font-size:38px;font-weight:700;color:var(--sprout);line-height:1}
+.lead .k{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);margin-top:7px}
+.level-up{display:flex;align-items:center;gap:12px;padding:14px;border:1px solid rgba(184,255,79,.4);
+  background:rgba(184,255,79,.06);border-radius:14px;color:var(--sprout);font-family:'Space Mono',monospace;font-size:14px}
+/* paid-to-wait claim */
+.claim-box{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;
+  padding:14px;background:var(--ink-3);border:1px solid var(--line);border-radius:14px}
+.claim-box .amt{color:var(--sprout)}
+.claim-box .btn{flex-shrink:0;padding:11px 18px;font-size:14px}
+.voucher{margin-top:12px;padding:15px;background:var(--ink-3);border:1px solid var(--verdant);
+  border-radius:14px;font-family:'Space Mono',monospace}
+.voucher .lab{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--verdant);margin-bottom:8px}
+.vcode{font-size:14px;line-height:1.4;color:var(--text);word-break:break-all;user-select:all;
+  background:var(--ink);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.voucher .meta{margin-top:8px;font-size:11px;color:var(--text-3)}
+.voucher.ok{border-color:rgba(45,212,191,.6);animation:flashbg .9s ease}
+.mini-lb{margin-top:20px}
+.mini-lb .h{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--text-3);margin-bottom:10px}
+.lb-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:10px;font-family:'Space Mono',monospace;font-size:13px}
+.lb-row:nth-child(odd){background:var(--ink-3)}
+.lb-row .rk{color:var(--text-3);width:26px}
+.lb-row .nm{color:var(--text);flex:1}
+.lb-row .amo{color:var(--rum)}
+.lb-row.me{outline:1px solid rgba(184,255,79,.4)}
+
+.hidden{display:none!important}
+.error-text{color:var(--danger);font-size:13px;margin-top:10px}
+
+/* ---- connection-loss fallback ---- */
+.connlost{margin-top:14px;padding:14px;border:1px solid var(--danger);border-radius:14px;
+  background:rgba(255,107,107,.07)}
+.cl-msg{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--text-2)}
+.cl-msg b{color:var(--danger);font-family:'Space Mono',monospace}
+.cl-acts{display:flex;gap:10px;margin-top:12px}
+.cl-acts .btn{flex:1;padding:11px 14px;font-size:13px}
+#btnAbandon{color:var(--text-3)}
+#btnAbandon:hover{border-color:var(--danger);color:var(--danger)}
+.hstatus.lost .pulse{background:var(--danger);box-shadow:0 0 10px var(--danger);animation:breath 1s ease-in-out infinite}
+.hstatus.lost{color:var(--text)}
+
+@media(min-width:641px){.entry .btn{width:auto}}
+@media(max-width:640px){
+  #app{padding:14px 12px 60px}
+  .grid{grid-template-columns:1fr}
+  .entry .row{flex-direction:column}
+  .entry .btn{width:100%}
+  .cta-row .btn{flex:1}
+  .now-waiting{font-size:19px}
+  header{padding:11px 12px;top:10px}
+  .logo .tag{display:none}
+  /* dense mobile waiting state: keep it scannable, not a tower */
+  .card{padding:14px 13px}
+  .core-wrap{height:128px}
+  .core-wrap .core{width:84px;height:84px}
+  .world-meta .met .v{font-size:18px}
+  .grid{gap:12px}
+  .logfeed{max-height:96px;overflow:hidden}
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="logo"><span class="dot"></span>WAITSI</div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <span class="handle-chip" id="handleChip"></span>
+      <span class="hstatus" id="hstatus"><span class="pulse"></span><span id="hstatLabel">READY</span></span>
+    </div>
+  </header>
+
+  <!-- ENTRY -->
+  <section id="view-entry" class="stagger">
+    <div class="hero">
+      <div class="badge">Make waiting for AI · fun</div>
+      <h1>Your commons grows<br>while you <span class="hl">wait.</span></h1>
+      <p class="sub">Every second an agent thinks, your persistent mini-world grows — XP, coins, new scenes — and a sponsor pays you to look while it does.</p>
+      <p class="sup">Zero setup. Open the surface, start a wait, watch it grow live.</p>
+      <div class="entry">
+        <div class="row">
+          <div class="field">
+            <label for="handle">Builder handle</label>
+            <input id="handle" autocomplete="off" placeholder="e.g. zubbycrypt" value="zubbycrypt" />
+          </div>
+          <div class="field">
+            <label for="agentKey">Agent key <span style="opacity:.6">(optional)</span></label>
+            <input id="agentKey" autocomplete="off" placeholder="which agent is thinking…" value="agent-orchestrator" />
+          </div>
+        </div>
+        <button class="btn btn-primary" id="btnStart">Start waiting — get paid to grow</button>
+        <div class="error-text hidden" id="entryErr"></div>
+      </div>
+      <div class="teach"><span class="lab">HOW TO READ</span><span>You're building. While the agent thinks, the <b>XP vine fills each second</b> and a <b>sponsor card</b> appears — look at it, and you're paid.</span></div>
+    </div>
+  </section>
+
+  <!-- CONNECTING -->
+  <div id="view-connecting" class="surface">
+    <div class="state-box"><div class="spinner"></div><h3>Starting your wait…</h3><p>Opening the live stream to your commons.</p></div>
+  </div>
+
+  <!-- WAITING -->
+  <section id="view-waiting" class="surface">
+    <div class="live-head">
+      <div class="now-waiting">You're waiting on <em id="livAgent">your agent</em></div>
+      <span class="pill"><span class="inv">LIVE</span> · session <span id="livSess">#—</span></span>
+    </div>
+    <div class="howto"><span class="lab">HOW TO READ</span><span>Everything below is <b>live</b> — the vine fills each second you wait, and the sponsor is why you're paid to look.</span></div>
+    <div class="grid">
+      <!-- WORLD -->
+      <div class="card world">
+        <h4>Your living commons</h4>
+        <div class="core-wrap">
+          <div class="core-ring"></div>
+          <div class="core-ring r2"></div>
+          <div class="core" id="core">
+            <div class="lvl" id="coreLvl">1<span>LVL</span></div>
+            <div class="pct" id="corePct">0%</div>
+          </div>
+        </div>
+        <div class="world-meta">
+          <div class="met"><div class="k">Coins earned</div><div class="v rum" id="mCoins">0</div><div class="d">life-long, not per-wait</div></div>
+          <div class="met"><div class="k">Waiting time</div><div class="v verd" id="mTimer">0:00</div><div class="d">this session</div></div>
+        </div>
+        <div class="vine">
+          <div class="top"><span class="lab">XP vine → next level</span><span class="n" id="vineN">0 / 60</span></div>
+          <div class="track"><div class="fill" id="vineFill"></div></div>
+          <div class="scene"><div class="lab">Scene</div><div class="txt" id="sceneTxt">an open field of prompts</div></div>
+        </div>
+        <div class="logfeed" id="logfeed"></div>
+      </div>
+
+      <!-- SPONSOR -->
+      <div class="card sponsor">
+        <span class="sp-tag"><span class="sp-tag-pulse">SPONSORED</span></span>
+        <div class="sp-name" id="spName">—</div>
+        <div class="sp-title" id="spTitle">Loading a discovery for this wait…</div>
+        <div class="sp-surface" id="spSurface">—</div>
+        <div class="divider"></div>
+        <div class="earn"><span class="lab">Earning while you wait</span><span class="amt" id="earnAmt">0.0000 <small>$CMNS</small></span></div>
+        <div class="split">
+          <div class="met"><div class="k">Your share</div><div class="v sprout" id="spSplitB">70%</div></div>
+          <div class="met"><div class="k">Compute subsidy</div><div class="v verd" id="spSplitC">30%</div></div>
+        </div>
+        <div class="cta-row">
+          <button class="btn btn-primary" id="btnBank" style="flex:1">Bank the wait</button>
+        </div>
+        <div class="bank-line" id="bankLine">Looks good? Bank it — every second counts, nothing is toggleable.</div>
+        <div class="cta-row">
+          <button class="btn btn-ghost" id="btnAbandon" style="flex:1">Abandon wait</button>
+        </div>
+        <div class="connlost hidden" id="connLost" role="alert" aria-live="assertive">
+          <div class="cl-msg"><b>Live stream lost.</b><span>Your waiting time still counts — bank it or reconnect.</span></div>
+          <div class="cl-acts">
+            <button class="btn btn-ghost" id="btnReconnect">Reconnect</button>
+            <button class="btn btn-primary" id="btnLostBank">Bank now</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- COMPLETE -->
+  <section id="view-complete" class="surface">
+    <div class="state-box" style="max-width:520px;text-align:left">
+      <div style="text-align:center;margin-bottom:18px">
+        <div class="core" id="coreFinal" style="margin:0 auto"></div>
+        <h3 style="margin-top:16px" id="doneTitle">Banked.</h3>
+        <p id="doneSub">Your commons grew. Here's what this wait paid.</p>
+      </div>
+      <div class="sum">
+        <div class="lead"><div class="big" id="sumSecs">0</div><div class="k">seconds banked</div></div>
+        <div class="lead"><div class="big" id="sumXp">0</div><div class="k">XP earned</div></div>
+        <div class="lead"><div class="big" id="sumCoins">0</div><div class="k">coins earned</div></div>
+        <div class="lead"><div class="big" style="color:var(--rum)" id="sumTotal">0</div><div class="k">$CMNS total</div></div>
+      </div>
+      <div id="sumDiscovery" class="hidden" style="margin-bottom:12px">
+        <div class="earn" style="flex-direction:column;align-items:stretch;gap:4px">
+          <div style="display:flex;justify-content:space-between"><span class="lab" id="sumDisSp">Sponsor</span><span class="amt" id="sumDisName" style="font-size:15px">—</span></div>
+          <div style="display:flex;justify-content:space-between"><span class="lab">Your builder share</span><span class="amt" id="sumDisBuild">0 $CMNS</span></div>
+          <div style="display:flex;justify-content:space-between"><span class="lab">Compute subsidy</span><span class="amt" id="sumDisSub">0 $CMNS</span></div>
+        </div>
+      </div>
+      <div class="level-up hidden" id="levelUp">▲ Level up — now looking at <span id="lvlUpScene" style="margin-left:6px"></span></div>
+      <div class="claim-box" id="claimBox">
+        <div>
+          <div class="lab">Claimable balance</div>
+          <div class="amt" id="claimAmt">— <small>$CMNS</small></div>
+          <div style="font-size:11px;color:var(--text-3);margin-top:3px">earned, not yet paid out</div>
+        </div>
+        <button class="btn btn-primary" id="btnClaim">Claim $CMNS</button>
+      </div>
+      <div class="voucher hidden" id="voucherBox">
+        <div class="lab">Voucher issued — cash your wait</div>
+        <div class="vcode" id="voucherCode">—</div>
+        <div class="meta" id="voucherMeta">—</div>
+      </div>
+      <div class="error-text hidden" id="claimErr"></div>
+      <div class="cta-row" style="margin-top:18px">
+        <button class="btn btn-primary" id="btnAgain" style="flex:1">Wait again</button>
+      </div>
+      <div class="mini-lb">
+        <div class="h">$CMNS VAULT · leaderboard</div>
+        <div id="lbList"><div class="lb-row" style="opacity:.6">loading…</div></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+const $=(s)=>document.querySelector(s);
+const esc=(s)=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fm=(m)=> (m/1e6).toFixed(m===Math.round(m/1e6)*1e6?0:4);
+
+let S=null;                 // live session state {id,handle,name,bornMs}
+let es=null, tickTimer=null, disco=null;
+
+const views={entry:'#view-entry',connecting:'#view-connecting',waiting:'#view-waiting',complete:'#view-complete'};
+function show(v){document.querySelectorAll('.surface').forEach(s=>s.style.display='none');$('#view-entry').style.display='none';$(views[v]).style.display='block';}
+
+function pad(n){return String(n).padStart(2,'0')}
+function fmtTimer(sec){return Math.floor(sec/60)+':'+pad(sec%60)}
+
+document.fonts && document.fonts.ready.then(()=>{ /* keep footer/header layout stable */ });
+
+$('#btnStart').addEventListener('click', startWait);
+$('#btnBank').addEventListener('click', bankWait);
+$('#btnClaim').addEventListener('click', claimPayout);
+$('#btnAgain').addEventListener('click', ()=>{ resetAfterExit(); show('entry'); });
+$('#btnAbandon').addEventListener('click', abandonWait);
+$('#btnReconnect').addEventListener('click', reconnectStream);
+$('#btnLostBank').addEventListener('click', ()=>{ $('#connLost').classList.add('hidden'); bankWait(); });
+
+function statusLive(lbl){const h=$('#hstatus');h.classList.remove('lost');h.classList.add('live');$('#hstatLabel').textContent=lbl||'LIVE';}
+function statusReady(){const h=$('#hstatus');h.classList.remove('live','lost');$('#hstatLabel').textContent='READY';}
+function statusLost(lbl){const h=$('#hstatus');h.classList.remove('live');h.classList.add('lost');$('#hstatLabel').textContent=lbl||'LOST';}
+
+// clean teardown shared by "wait again" + "abandon": close stream, kill
+// timers/watchdog, hide the loss banner, return the header to idle.
+function resetAfterExit(){
+  if(es)es.close(); es=null;
+  clearInterval(tickTimer); tickTimer=null;
+  clearInterval(watchdog); watchdog=null;
+  lastBeat=0; S=null;
+  $('#connLost').classList.add('hidden');
+  $('#handleChip').style.display='none';
+  statusReady();
+}
+
+// Lost-connection watchdog. The SSE auto-retries on its own; the failure mode
+// that bites is a hard server/network drop where no frame ever arrives again.
+// If we stop hearing from the stream for ~9s while we're meant to be waiting,
+// surface a recoverable "live stream lost" banner (reconnect or bank-now).
+let watchdog=null, lastBeat=0;
+function armWatchdog(){
+  clearInterval(watchdog);
+  watchdog=setInterval(()=>{
+    if(!S){ clearInterval(watchdog); return; }
+    if(Date.now()-lastBeat>9000){
+      // only flag if the stream is still trying and we truly heard nothing
+      $('#connLost').classList.remove('hidden');
+      statusLost('LOST');
+    }
+  },2500);
+}
+function markBeat(){ lastBeat=Date.now(); }
+
+async function api(path,body){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j;}
+
+async function startWait(){
+  const handle=$('#handle').value.trim(), agent=$('#agentKey').value.trim();
+  if(!handle){err('handle is required',true);return}
+  err('',true);$('#btnStart').disabled=true; show('connecting'); statusLive('CONNECTING');
+  try{
+    disco=await api('/waits/start',{handle,agentKey:agent});
+    S={id:disco.session.id,handle,agent:agent||'your agent',token:disco.session.token,bornMs:Date.now()};
+    $('#handleChip').textContent='@'+handle; $('#handleChip').style.display='block';
+    // Skeleton-first: paint the living-commons surface immediately with what
+    // we already know (session #, sponsor), then stream hydrates the numbers
+    // as frames arrive. No long bare-spinner wait.
+    show('waiting'); renderSponsor();
+    $('#livSess').textContent='#'+S.id;
+    $('#livAgent').textContent=esc(S.agent);
+    $('#coreLvl').innerHTML='–<span>LVL</span>';
+    $('#corePct').textContent='…';
+    $('#mCoins').textContent='–';
+    $('#vineN').textContent='0 / –';
+    armWatchdog(); markBeat();
+    await enterStream();
+  }catch(e){show('entry');statusReady();$('#btnStart').disabled=false;err(e.message,true)}
+}
+
+// Start SSE stream — the core of the live surface.
+function enterStream(){
+  return new Promise((res)=>{
+    es=new EventSource('/waits/'+S.id+'/stream?handle='+encodeURIComponent(S.handle)+'&token='+encodeURIComponent(S.token));
+    es.addEventListener('open',()=>{ statusLive('LIVE'); res(); try{ renderWaiting(); }catch(e){ console.error(e); } });
+    es.addEventListener('error',()=>{/* EventSource auto-retries; the watchdog decides when to give up */});
+    es.addEventListener('message',(ev)=>{markBeat(); $('#connLost').classList.add('hidden'); statusLive('LIVE'); try{onStream(JSON.parse(ev.data))}catch{}});
+  });
+}
+
+// Reconnect after a suspected hard drop: tear the old stream, re-arm the
+// watchdog, and reopen with the same live session token.
+function reconnectStream(){
+  $('#connLost').classList.add('hidden');
+  statusLive('RECONNECTING');
+  if(es){es.close(); es=null;}
+  armWatchdog(); markBeat();
+  enterStream().catch(()=>{});
+}
+
+// Abandon an active wait (recoverable): close stream, settle the session as
+// abandoned (nothing banked), return to entry with a clear note.
+async function abandonWait(){
+  if(!S) return;
+  try{
+    if(es){es.close(); es=null;}
+    await api('/waits/'+S.id+'/abandon',{handle:S.handle,token:S.token});
+    resetAfterExit();
+    err('Abandoned — nothing banked this wait. Your world and balance are untouched.',true);
+  }catch(e){
+    err(e.message,true);
+  }
+}
+
+// Show the live waiting surface once the stream is open. The world's numbers
+// arrive via the hello/tick frames; this only wires layout + the sponsor card.
+function renderWaiting(){
+  show('waiting');
+  $('#livSess').textContent='#'+S.id;
+  $('#livAgent').textContent=esc(S.agent);
+  renderSponsor();
+}
+
+function onStream(msg){
+  if(msg.type==='hello'){ primeWorld(msg.world); }
+  else if(msg.type==='tick'){ applyTick(msg.world); }
+  if(msg.session && msg.session.status!=='active'){ finishWait(); }
+}
+
+let lastLevel=1;
+function primeWorld(w){
+  lastLevel=w.level;
+  $('#livAgent').textContent=esc(S.agent);
+  $('#livSess').textContent='#'+S.id;
+  $('#coreLvl').innerHTML=w.level+'<span>LVL</span>';
+  $('#corePct').textContent=Math.round(w.xpIntoLevel/w.needForNext*100)+'%';
+  $('#mCoins').textContent=w.coins;
+  $('#sceneTxt').textContent=w.looking||'the commons';
+  setVine(w);
+  renderSponsor();
+  // local timer ticks visually independent of server frames
+  clearInterval(tickTimer);
+  tickTimer=setInterval(()=>{ $('#mTimer').textContent=fmtTimer(Math.floor((Date.now()-S.bornMs)/1000)); },250);
+  log('stream open','· waiting layer live');
+}
+function applyTick(w){
+  if(w.level!==lastLevel){ lastLevel=w.level; flashCore(); log('LEVEL '+w.level,'scene unlocked'); }
+  $('#coreLvl').innerHTML=w.level+'<span>LVL</span>';
+  $('#corePct').textContent=Math.round(w.xpIntoLevel/w.needForNext*100)+'%';
+  $('#mCoins').textContent=w.coins;
+  $('#sceneTxt').textContent=w.looking||'the commons';
+  setVine(w);
+  pulseEarn();
+}
+function setVine(w){
+  $('#vineN').textContent=w.xpIntoLevel+' / '+w.needForNext;
+  $('#vineFill').style.width=Math.min(100,Math.round(w.xpIntoLevel/w.needForNext*100))+'%';
+}
+function renderSponsor(){
+  if(!disco||!disco.discovery){$('#spName').textContent='No sponsor this wait';$('#spTitle').textContent='Sponsor budget exhausted.';return}
+  const d=disco.discovery;
+  $('#spName').textContent=esc(d.sponsor);
+  $('#spTitle').textContent=esc(d.title);
+  $('#spSurface').textContent=esc(d.surface);
+}
+let earnAcc=0; // live estimate in $CMNS; the real amount banks on Complete
+function pulseEarn(){ earnAcc+=0.0032; $('#earnAmt').innerHTML=earnAcc.toFixed(4)+' <small>$CMNS<small style="font-size:10px;opacity:.7"> · est</small></small>'; }
+function flashCore(){ const c=$('#core'); c.classList.add('flash'); setTimeout(()=>c.classList.remove('flash'),900); }
+function log(txt){ const f=$('#logfeed'); const d=document.createElement('div'); d.className='logline';
+  const t=new Date().toLocaleTimeString([],{hour12:false});
+  d.innerHTML='<span class="t">'+t+'</span><span style="color:var(--text-2)">'+esc(txt)+'</span>';
+  f.prepend(d); while(f.children.length>5)f.lastChild.remove(); }
+
+async function bankWait(){
+  if(es)es.close();
+  const secs=Math.max(1,Math.floor((Date.now()-S.bornMs)/1000)-1); // -1 since timer starts ~immediately
+  statusLive('BANKING');
+  try{
+    const r=await api('/waits/'+S.id+'/complete',{handle:S.handle,token:S.token,agentKey:S.agent==='your agent'?undefined:S.agent,attendedTicks:secs});
+    await renderComplete(r);
+    statusLive('BANKED');
+  }catch(e){ if(es)enterStream(); err(e.message); }
+}
+function finishWait(){ clearInterval(tickTimer); tickTimer=null; clearInterval(watchdog); watchdog=null; }
+
+// Paid-to-wait: claim the earned balance. Money moves -> a voucher goes live.
+async function claimPayout(){
+  const btn=$('#btnClaim'); const errEl=$('#claimErr');
+  errEl.classList.add('hidden'); btn.disabled=true; btn.textContent='Claiming…';
+  try{
+    const c=await api('/payouts',{handle:S.handle,token:S.token});
+    $('#voucherBox').classList.remove('hidden');
+    $('#voucherBox').classList.add('ok');
+    $('#voucherCode').textContent=c.payout.voucher;
+    $('#voucherMeta').textContent='Claimed '+c.payout.amountStr+' $CMNS · status: '+c.payout.status+
+      ' · claimable remaining: '+c.claimableRemaining+' $CMNS';
+    $('#claimAmt').innerHTML=c.payout.amountStr+' <small>$CMNS</small>';
+    btn.textContent='Claimed ✓'; btn.disabled=true;
+    loadLeaderboard(); // reflects the claimed balance across builders
+  }catch(e){
+    errEl.textContent=e.message; errEl.classList.remove('hidden');
+    btn.disabled=false; btn.textContent='Claim $CMNS';
+  }
+}
+
+async function renderComplete(r){
+  clearInterval(tickTimer); tickTimer=null; clearInterval(watchdog); watchdog=null; if(es)es.close(); es=null;
+  $('#sumSecs').textContent=r.session.seconds;
+  $('#sumXp').textContent=r.session.xpEarned;
+  $('#sumCoins').textContent=r.session.coinsEarned;
+  // total $CMNS from the board (authoritative ledger sum)
+  const board=await fetch('/board/'+encodeURIComponent(S.handle)).then(q=>q.json());
+  $('#sumTotal').textContent=board.totalStr;
+  $('#coreFinal').innerHTML='<div class="lvl" style="color:var(--sprout)">'+(r.world?r.world.level:1)+'<span style="font-size:15px;color:var(--text-3)">LVL</span></div>';
+  $('#doneTitle').textContent='Banked — +'+r.session.xpEarned+' XP, +'+r.session.coinsEarned+' coins.';
+  // reset + surface the claimable balance (paid-to-wait)
+  $('#voucherBox').classList.add('hidden');
+  $('#claimErr').classList.add('hidden');
+  const claimBtn=$('#btnClaim'); claimBtn.disabled=false; claimBtn.textContent='Claim $CMNS';
+  $('#claimAmt').innerHTML=esc(board.claimableStr)+' <small>$CMNS</small>';
+  if(board.claimableMicro<=0){ claimBtn.disabled=true; claimBtn.textContent='Nothing to claim'; }
+  if(r.discovery){
+    $('#sumDiscovery').classList.remove('hidden');
+    $('#sumDisSp').textContent='Sponsor '+esc(r.discovery.sponsor);
+    $('#sumDisName').textContent=esc(r.discovery.title);
+    $('#sumDisBuild').textContent=r.discovery.builderCoinsStr+' $CMNS';
+    $('#sumDisSub').textContent=r.discovery.computeSubsidyStr+' $CMNS';
+  }
+  if(r.level && r.level.level> (lastLevel||1)){ $('#levelUp').classList.remove('hidden'); $('#lvlUpScene').textContent=r.level.looking; }
+  loadLeaderboard();
+  show('complete');
+}
+async function loadLeaderboard(){
+  try{const q=await fetch('/leaderboard?limit=5').then(j=>j.json());
+    $('#lbList').innerHTML=q.builders.map(b=>'<div class="lb-row'+(b.handle===S.handle?' me':'')+'"><span class="rk">#'+b.rank+'</span><span class="nm">'+esc(b.handle)+'</span><span class="amo">'+b.totalStr+' $CMNS</span></div>').join('')||'<div class="lb-row" style="opacity:.6">No builders yet</div>';
+  }catch(e){ $('#lbList').innerHTML='<div class="lb-row" style="opacity:.6">leaderboard unavailable</div>'; }
+}
+
+function err(m,inline){const t=$('#entryErr');t.textContent=m;t.classList.toggle('hidden',!m);}
+</script>
+</body>
+</html>

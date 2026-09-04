@@ -1,0 +1,14 @@
+# WAITSI — long-running SSE backend + wait-surface (single service).
+# Render web service (not serverless) because the surface drives a live
+# 1-second SSE stream that must stay connected indefinitely.
+services:
+  - type: web
+    name: waitsi
+    runtime: node
+    plan: free
+    buildCommand: ""
+    startCommand: npm start
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      # PORT is injected automatically by Render.
