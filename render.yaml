@@ -7,7 +7,7 @@ services:
     runtime: node
     plan: free
     buildCommand: ""
-    startCommand: npm start
+    startCommand: npm run seed && npm start
     envVars:
       - key: HOST
         value: 0.0.0.0
