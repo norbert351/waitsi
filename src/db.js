@@ -1,285 +1,301 @@
-// DB layer: SQLite via node:sqlite. Zero external deps.
-import { DatabaseSync } from 'node:sqlite';
-import { randomBytes, createHash } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+// DB layer: PostgreSQL via `pg`. Async, integer micro-units only.
+// Connection comes from WAITSI_DATABASE_URL || DATABASE_URL (never hardcoded —
+// the secret lives in env/Render, not the repo).
+//
+// Test isolation: when WAITSI_DB_SCHEMA is set, every table is created and
+// queried inside that schema (tables are schema-qualified in SQL). The smoke
+// suite sets a fresh schema per run so tests never collide on the shared Neon
+// DB. We intentionally DON'T use `options: search_path` — Neon's pooled
+// connection rejects that startup parameter (08P01).
+import pg from 'pg';
+import { randomBytes } from 'node:crypto';
 
-const DB_PATH = process.env.WAITSI_DB_PATH
-  ? resolve(process.env.WAITSI_DB_PATH)
-  : resolve(process.cwd(), 'data', 'waitsi.db');
+const { Pool } = pg;
 
-mkdirSync(dirname(DB_PATH), { recursive: true });
-export const db = new DatabaseSync(DB_PATH);
+const RAW_URL = process.env.WAITSI_DATABASE_URL || process.env.DATABASE_URL;
+if (!RAW_URL) {
+  throw new Error('No database configured. Set WAITSI_DATABASE_URL (or DATABASE_URL) to a PostgreSQL connection string.');
+}
 
-export function initSchema() {
-  db.exec(`
-    PRAGMA journal_mode = WAL;
+// node-pg doesn't consume `sslmode`/`channel_binding` query params from the URL
+// reliably; strip them and control TLS via the `ssl` option (Neon requires it).
+const connectionString = RAW_URL.split('?')[0];
 
-    CREATE TABLE IF NOT EXISTS users (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      handle        TEXT UNIQUE NOT NULL,
-      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+const SCHEMA = process.env.WAITSI_DB_SCHEMA || null;
+if (SCHEMA && !/^[A-Za-z0-9_]+$/.test(SCHEMA)) {
+  throw new Error('WAITSI_DB_SCHEMA must be a bare identifier (letters/digits/underscore).');
+}
+// Schema-qualifier for every table reference. Public schema has no qualifier.
+export const S = SCHEMA ? `${SCHEMA}.` : '';
+
+export const pool = new Pool({ connectionString, ssl: { rejectUnauthorized: false } });
+
+// ---- small async helpers ---------------------------------------------------
+async function one(sql, params = []) {
+  const r = await pool.query(sql, params);
+  return r.rows[0] ?? null;
+}
+async function all(sql, params = []) {
+  const r = await pool.query(sql, params);
+  return r.rows;
+}
+
+export async function initSchema() {
+  if (SCHEMA) await pool.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ${S}users (
+      id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      handle      TEXT UNIQUE NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     -- Persistent world state: grows with every wait (Repeatability 15%)
-    CREATE TABLE IF NOT EXISTS worlds (
-      user_id      INTEGER PRIMARY KEY REFERENCES users(id),
-      xp           INTEGER NOT NULL DEFAULT 0,
-      level        INTEGER NOT NULL DEFAULT 1,
-      coins        INTEGER NOT NULL DEFAULT 0,
-      looking      TEXT NOT NULL DEFAULT 'the commons',
-      updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    CREATE TABLE IF NOT EXISTS ${S}worlds (
+      user_id     INTEGER PRIMARY KEY REFERENCES ${S}users(id),
+      xp          INTEGER NOT NULL DEFAULT 0,
+      level       INTEGER NOT NULL DEFAULT 1,
+      coins       INTEGER NOT NULL DEFAULT 0,
+      looking     TEXT NOT NULL DEFAULT 'the commons',
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     -- A single agent wait session (the unit of Waiting Experience 30%)
-    CREATE TABLE IF NOT EXISTS wait_sessions (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id      INTEGER NOT NULL REFERENCES users(id),
+    CREATE TABLE IF NOT EXISTS ${S}wait_sessions (
+      id           INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      user_id      INTEGER NOT NULL REFERENCES ${S}users(id),
       agent_key    TEXT NOT NULL DEFAULT 'default',
       status       TEXT NOT NULL DEFAULT 'active'
                      CHECK(status IN ('active','completed','abandoned')),
-      started_at   TEXT NOT NULL DEFAULT (datetime('now')),
-      ended_at     TEXT,
+      started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      ended_at     TIMESTAMPTZ,
       seconds      INTEGER NOT NULL DEFAULT 0,
       xp_earned    INTEGER NOT NULL DEFAULT 0,
-      coins_earned INTEGER NOT NULL DEFAULT 0
+      coins_earned INTEGER NOT NULL DEFAULT 0,
+      token        TEXT
     );
 
     -- Builder claim payouts — money moves (Builder paid to wait). Each voucher
     -- is unique + claimed once (replay-proof). Claimable = earned (wait_xp +
     -- discovery builder-share) MINUS what's already been claimed.
-    CREATE TABLE IF NOT EXISTS payouts (
-      id           INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id      INTEGER NOT NULL REFERENCES users(id),
+    CREATE TABLE IF NOT EXISTS ${S}payouts (
+      id           INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      user_id      INTEGER NOT NULL REFERENCES ${S}users(id),
       amount_micro INTEGER NOT NULL,
       voucher      TEXT NOT NULL,
       status       TEXT NOT NULL DEFAULT 'claimed'
                      CHECK(status IN ('claimed','revoked')),
-      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
-      claimed_at   TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      claimed_at   TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     -- Sponsor discovery catalog (the Builder Ad Network revenue engine)
-    CREATE TABLE IF NOT EXISTS discoveries (
-      id              INTEGER PRIMARY KEY AUTOINCREMENT,
-      sponsor         TEXT NOT NULL,
-      title           TEXT NOT NULL,
-      category        TEXT NOT NULL CHECK(category IN ('model','infra','tool','brand')),
-      surface         TEXT NOT NULL,
+    CREATE TABLE IF NOT EXISTS ${S}discoveries (
+      id               INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      sponsor          TEXT NOT NULL,
+      title            TEXT NOT NULL,
+      category         TEXT NOT NULL CHECK(category IN ('model','infra','tool','brand')),
+      surface          TEXT NOT NULL,
       budget_remaining INTEGER NOT NULL DEFAULT 100000,   -- micro-CMNS/ticks
-      active          INTEGER NOT NULL DEFAULT 1,
-      cpm             INTEGER NOT NULL DEFAULT 2000        -- micro-CMNS per 1000 "attentive" ticks
+      active           BOOLEAN NOT NULL DEFAULT true,
+      cpm              INTEGER NOT NULL DEFAULT 2000        -- micro-CMNS per 1000 "attentive" ticks
     );
 
     -- Attribution ledger: every reward + revenue event (Everything Counts)
-    -- One entry per (session, discovery); no toggles/attribution games.
-    CREATE TABLE IF NOT EXISTS reward_ledger (
-      id            INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id       INTEGER NOT NULL REFERENCES users(id),
-      session_id    INTEGER REFERENCES wait_sessions(id),
-      discovery_id  INTEGER REFERENCES discoveries(id),
+    CREATE TABLE IF NOT EXISTS ${S}reward_ledger (
+      id            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      user_id       INTEGER NOT NULL REFERENCES ${S}users(id),
+      session_id    INTEGER REFERENCES ${S}wait_sessions(id),
+      discovery_id  INTEGER REFERENCES ${S}discoveries(id),
       kind          TEXT NOT NULL CHECK(kind IN ('wait_xp','wait_coins','discovery','sponsor_rev')),
       amount_micro  INTEGER NOT NULL,   -- micro-units (integer, no floats)
       reason        TEXT NOT NULL,
-      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
-
-  // --- Migration: add session token to existing DBs + backfill any old rows ---
-  const cols = db.prepare('PRAGMA table_info(wait_sessions)').all().map((c) => c.name);
-  if (!cols.includes('token')) {
-    db.exec(`ALTER TABLE wait_sessions ADD COLUMN token TEXT`);
-  }
-  db.exec(`UPDATE wait_sessions SET token = 'wv_' || hex(randomblob(24)) WHERE token IS NULL OR token = ''`);
+  await pool.query(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS token TEXT`);
 }
 
 // ---------- users ----------
-export function getOrCreateUser(handle) {
-  const existing = db.prepare('SELECT * FROM users WHERE handle = ?').get(handle);
-  if (existing) return existing;
-  db.prepare('INSERT INTO users (handle) VALUES (?)').run(handle);
-  const u = db.prepare('SELECT * FROM users WHERE handle = ?').get(handle);
-  db.prepare('INSERT INTO worlds (user_id) VALUES (?)').run(u.id);
+export async function getOrCreateUser(handle) {
+  let u = await one(`SELECT * FROM ${S}users WHERE handle = $1`, [handle]);
+  if (u) return u;
+  u = await one(`INSERT INTO ${S}users (handle) VALUES ($1) ON CONFLICT (handle) DO NOTHING RETURNING *`, [handle]);
+  if (!u) u = await one(`SELECT * FROM ${S}users WHERE handle = $1`, [handle]);
+  await pool.query(`INSERT INTO ${S}worlds (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [u.id]);
   return u;
 }
 
-export function getUserById(id) {
-  return db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+export async function getUserById(id) {
+  return one(`SELECT * FROM ${S}users WHERE id = $1`, [id]);
 }
 
 // ---------- worlds ----------
-export function getWorld(userId) {
-  return db.prepare('SELECT * FROM worlds WHERE user_id = ?').get(userId);
+export async function getWorld(userId) {
+  return one(`SELECT * FROM ${S}worlds WHERE user_id = $1`, [userId]);
 }
 
-export function spendTimeInWorld(userId, ds) {
-  // Advance the world by a duration slice (seconds) — the fun layer.
-  const w = getWorld(userId);
+export async function spendTimeInWorld(userId, ds) {
+  const w = await getWorld(userId);
   if (!w) return null;
   const xp = (w.xp || 0) + ds;
   const coins = (w.coins || 0) + ds;
-  db.prepare('UPDATE worlds SET xp = ?, coins = ?, updated_at = datetime(\'now\') WHERE user_id = ?')
-    .run(xp, coins, userId);
-  return getWorld(userId);
+  return one(
+    `UPDATE ${S}worlds SET xp = $1, coins = $2, updated_at = now() WHERE user_id = $3 RETURNING *`,
+    [xp, coins, userId],
+  );
 }
 
-export function bumpLevel(userId, newLevel, newLooking) {
-  db.prepare('UPDATE worlds SET level = ?, looking = ?, updated_at = datetime(\'now\') WHERE user_id = ?')
-    .run(newLevel, newLooking, userId);
-  return getWorld(userId);
+export async function bumpLevel(userId, newLevel, newLooking) {
+  return one(
+    `UPDATE ${S}worlds SET level = $1, looking = $2, updated_at = now() WHERE user_id = $3 RETURNING *`,
+    [newLevel, newLooking, userId],
+  );
 }
 
 // ---------- wait sessions ----------
-// Session-scoped bearer token: issued at start, required on every state-changing
-// call (tick/complete/abandon) so a foreign agent can't operate another's
-// session and every write is replay-scoped to an owned session (401/403).
-export function startSession(userId, agentKey) {
-  const res = db.prepare(
-    `INSERT INTO wait_sessions (user_id, agent_key, status, token) VALUES (?, ?, 'active', ?)`
-  ).run(userId, agentKey || 'default', newSessionToken());
-  return db.prepare('SELECT * FROM wait_sessions WHERE id = ?').get(res.lastInsertRowid);
+export async function startSession(userId, agentKey) {
+  const token = await newSessionToken();
+  return one(
+    `INSERT INTO ${S}wait_sessions (user_id, agent_key, status, token)
+     VALUES ($1, $2, 'active', $3) RETURNING *`,
+    [userId, agentKey || 'default', token],
+  );
 }
 
-function newSessionToken() {
+async function newSessionToken() {
   let t = '';
   do {
     t = 'wv_' + randomBytes(24).toString('hex');
-  } while (db.prepare('SELECT 1 FROM wait_sessions WHERE token = ?').get(t)); // collision-proof
+  } while (await one(`SELECT 1 AS x FROM ${S}wait_sessions WHERE token = $1`, [t]));
   return t;
 }
 
-export function getActiveSession(sessionId) {
-  return db.prepare('SELECT * FROM wait_sessions WHERE id = ?').get(sessionId);
+export async function getActiveSession(sessionId) {
+  return one(`SELECT * FROM ${S}wait_sessions WHERE id = $1`, [sessionId]);
 }
 
-// Resolve the owner of a session token (unique). Returns the session or null.
-export function getSessionByToken(token) {
+export async function getSessionByToken(token) {
   if (!token) return null;
-  return db.prepare('SELECT * FROM wait_sessions WHERE token = ?').get(token);
+  return one(`SELECT * FROM ${S}wait_sessions WHERE token = $1`, [token]);
 }
 
 // ---------- discoveries ----------
-export function listActiveDiscoveries() {
-  return db.prepare('SELECT * FROM discoveries WHERE active = 1 AND budget_remaining > 0').all();
+export async function listActiveDiscoveries() {
+  return all(`SELECT * FROM ${S}discoveries WHERE active = true AND budget_remaining > 0 ORDER BY id`);
 }
 
-export function getDiscovery(id) {
-  return db.prepare('SELECT * FROM discoveries WHERE id = ?').get(id);
+export async function getDiscovery(id) {
+  return one(`SELECT * FROM ${S}discoveries WHERE id = $1`, [id]);
 }
 
-export function chargeDiscoveryBudget(id, micro) {
-  db.prepare('UPDATE discoveries SET budget_remaining = budget_remaining - ? WHERE id = ?')
-    .run(micro, id);
-  return getDiscovery(id);
+export async function chargeDiscoveryBudget(id, micro) {
+  return one(`UPDATE ${S}discoveries SET budget_remaining = budget_remaining - $1 WHERE id = $2 RETURNING *`, [micro, id]);
 }
 
 // ---------- ledger ----------
-export function appendLedger({ user_id, session_id = null, discovery_id = null, kind, amount_micro, reason }) {
-  const res = db.prepare(
-    `INSERT INTO reward_ledger (user_id, session_id, discovery_id, kind, amount_micro, reason)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).run(user_id, session_id, discovery_id, kind, amount_micro, reason);
-  return res.lastInsertRowid;
+export async function appendLedger({ user_id, session_id = null, discovery_id = null, kind, amount_micro, reason }) {
+  const r = await pool.query(
+    `INSERT INTO ${S}reward_ledger (user_id, session_id, discovery_id, kind, amount_micro, reason)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [user_id, session_id, discovery_id, kind, amount_micro, reason],
+  );
+  return r.rows[0].id;
 }
 
-export function sumLedger(userId) {
-  return db.prepare(
-    `SELECT COALESCE(SUM(amount_micro),0) AS total FROM reward_ledger WHERE user_id = ?`
-  ).get(userId).total;
+export async function sumLedger(userId) {
+  return (await one(`SELECT COALESCE(SUM(amount_micro),0)::float8 AS total FROM ${S}reward_ledger WHERE user_id = $1`, [userId])).total;
 }
 
-export function tallyByKind(userId) {
-  return db.prepare(
-    `SELECT kind, COALESCE(SUM(amount_micro),0) AS total FROM reward_ledger WHERE user_id = ? GROUP BY kind`
-  ).all(userId);
+export async function tallyByKind(userId) {
+  return all(`SELECT kind, COALESCE(SUM(amount_micro),0)::float8 AS total FROM ${S}reward_ledger WHERE user_id = $1 GROUP BY kind`, [userId]);
 }
 
-export function sessionCount(userId) {
-  return db.prepare(
-    `SELECT COUNT(*) AS n FROM wait_sessions WHERE user_id = ? AND status='completed'`
-  ).get(userId).n;
+export async function sessionCount(userId) {
+  return (await one(
+    `SELECT COUNT(*)::int AS n FROM ${S}wait_sessions WHERE user_id = $1 AND status='completed'`, [userId],
+  )).n;
 }
 
 // ---------- payouts (Builder paid to wait — money moves) ----------
-// Earned balance = what the builder actually banked (wait XP + their share of
-// discovery revenue). Compute subsidy (sponsor_rev) is NOT claimable — it's an
-// infra credit, not builder income.
-export function sumEarnedMicro(userId) {
-  return db.prepare(
-    `SELECT COALESCE(SUM(amount_micro),0) AS t FROM reward_ledger
-     WHERE user_id = ? AND kind IN ('wait_xp','discovery')`
-  ).get(userId).t;
+export async function sumEarnedMicro(userId) {
+  return (await one(
+    `SELECT COALESCE(SUM(amount_micro),0)::float8 AS t FROM ${S}reward_ledger
+     WHERE user_id = $1 AND kind IN ('wait_xp','discovery')`, [userId],
+  )).t;
 }
 
-export function sumClaimedMicro(userId) {
-  return db.prepare(
-    `SELECT COALESCE(SUM(amount_micro),0) AS t FROM payouts WHERE user_id = ? AND status='claimed'`
-  ).get(userId).t;
+export async function sumClaimedMicro(userId) {
+  return (await one(
+    `SELECT COALESCE(SUM(amount_micro),0)::float8 AS t FROM ${S}payouts WHERE user_id = $1 AND status='claimed'`, [userId],
+  )).t;
 }
 
-export function createPayout({ user_id, amount_micro, voucher }) {
-  const r = db.prepare(
-    `INSERT INTO payouts (user_id, amount_micro, voucher, status) VALUES (?, ?, ?, 'claimed')`
-  ).run(user_id, amount_micro, voucher);
-  return db.prepare('SELECT * FROM payouts WHERE id = ?').get(r.lastInsertRowid);
+export async function createPayout({ user_id, amount_micro, voucher }) {
+  return one(
+    `INSERT INTO ${S}payouts (user_id, amount_micro, voucher, status) VALUES ($1, $2, $3, 'claimed') RETURNING *`,
+    [user_id, amount_micro, voucher],
+  );
 }
 
-export function listPayouts(userId) {
-  return db.prepare('SELECT * FROM payouts WHERE user_id = ? ORDER BY id DESC').all(userId);
+export async function listPayouts(userId) {
+  return all(`SELECT * FROM ${S}payouts WHERE user_id = $1 ORDER BY id DESC`, [userId]);
 }
 
-export function totalVaultMicro() {
-  return db.prepare('SELECT COALESCE(SUM(amount_micro),0) AS t FROM payouts WHERE status=\'claimed\'').get().t;
+export async function completeSession(sessionId, { seconds, xp, coins }) {
+  return one(
+    `UPDATE ${S}wait_sessions SET status='completed', ended_at=now(), seconds=$1, xp_earned=$2, coins_earned=$3
+     WHERE id=$4 RETURNING *`,
+    [seconds, xp, coins, sessionId],
+  );
+}
+
+export async function totalVaultMicro() {
+  return (await one(`SELECT COALESCE(SUM(amount_micro),0)::float8 AS t FROM ${S}payouts WHERE status='claimed'`)).t;
 }
 
 // ---- leaderboard (the $CMNS Vault as a public scoreboard) ----
-// Ranks every builder by total earned micro-units. Ties broken by earlier
-// first activity (older = higher), then handle for determinism.
-export function leaderboard(limit = 20) {
-  const rows = db.prepare(
+export async function leaderboard(limit = 20) {
+  const rows = await all(
     `SELECT
        u.id AS user_id, u.handle,
-       COALESCE(SUM(l.amount_micro),0) AS total_micro,
-       COALESCE(SUM(CASE WHEN l.kind='discovery' OR l.kind='sponsor_rev' THEN l.amount_micro ELSE 0 END),0) AS sponsor_micro,
-       (SELECT COALESCE(SUM(xp),0) FROM worlds w WHERE w.user_id = u.id) AS xp,
-       (SELECT COALESCE(level,1) FROM worlds w WHERE w.user_id = u.id) AS level,
-       (SELECT COUNT(*) FROM wait_sessions s WHERE s.user_id=u.id AND s.status='completed') AS waits,
+       COALESCE(SUM(l.amount_micro),0)::float8 AS total_micro,
+       COALESCE(SUM(CASE WHEN l.kind='discovery' OR l.kind='sponsor_rev' THEN l.amount_micro ELSE 0 END),0)::float8 AS sponsor_micro,
+       (SELECT COALESCE(SUM(xp),0)::float8 FROM ${S}worlds w WHERE w.user_id = u.id) AS xp,
+       (SELECT COALESCE(level,1) FROM ${S}worlds w WHERE w.user_id = u.id) AS level,
+       (SELECT COUNT(*)::int FROM ${S}wait_sessions s WHERE s.user_id=u.id AND s.status='completed') AS waits,
        MIN(l.created_at) AS first_activity
-     FROM users u
-     LEFT JOIN reward_ledger l ON l.user_id = u.id
+     FROM ${S}users u
+     LEFT JOIN ${S}reward_ledger l ON l.user_id = u.id
      GROUP BY u.id
-     HAVING total_micro > 0
+     HAVING COALESCE(SUM(l.amount_micro),0)::float8 > 0
      ORDER BY total_micro DESC, first_activity ASC, u.handle ASC
-     LIMIT ?`
-  ).all(limit);
+     LIMIT $1`,
+    [limit],
+  );
   return rows.map((r, i) => ({ rank: i + 1, ...r }));
 }
 
-// A builder's rank among all builders (1-based; null if none earned yet).
-export function rankOf(userId) {
-  const lb = leaderboard(10000);
+export async function rankOf(userId) {
+  const lb = await leaderboard(10000);
   const idx = lb.findIndex((r) => r.user_id === userId);
   return idx === -1 ? null : idx + 1;
 }
 
-// Mark a live session abandoned (user closed the app mid-wait).
-export function abandonSession(sessionId) {
-  db.prepare(
-    `UPDATE wait_sessions SET status='abandoned', ended_at=datetime('now') WHERE id=? AND status='active'`
-  ).run(sessionId);
-  return db.prepare('SELECT * FROM wait_sessions WHERE id = ?').get(sessionId);
+export async function abandonSession(sessionId) {
+  return one(
+    `UPDATE ${S}wait_sessions SET status='abandoned', ended_at=now() WHERE id=$1 AND status='active' RETURNING *`,
+    [sessionId],
+  );
 }
 
-// Revert an mistaken settlement by removing a ledger row + its session entries.
-// (Audit path for the operator; only works on an un-quoted run.)
-export function revertSession(sessionId) {
-  db.prepare(`DELETE FROM reward_ledger WHERE session_id = ?`).run(sessionId);
-  const s = db.prepare('SELECT * FROM wait_sessions WHERE id = ?').get(sessionId);
-  if (s) db.prepare('DELETE FROM wait_sessions WHERE id = ?').run(sessionId);
+// Revert an mistaken settlement (operator audit path on an un-quoted run).
+export async function revertSession(sessionId) {
+  await pool.query(`DELETE FROM ${S}reward_ledger WHERE session_id = $1`, [sessionId]);
+  const s = await getActiveSession(sessionId);
+  if (s) await pool.query(`DELETE FROM ${S}wait_sessions WHERE id = $1`, [sessionId]);
   return s;
 }
 
-// close on exit (WAL flush)
-export function closeDb() {
-  try { db.close(); } catch {}
+export async function closeDb() {
+  try { await pool.end(); } catch {}
 }

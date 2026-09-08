@@ -19,7 +19,7 @@ const TOTAL_MICRO = 1_000_000;
 
 before(async () => {
   process.env.PORT = String(PORT);
-  process.env.WAITSI_DB_PATH = `/tmp/waitsi_test_${Date.now()}.db`;
+  process.env.WAITSI_DB_SCHEMA = 'api_' + Date.now();
   // re-init schema by importing fresh modules via the server process
   proc = spawn(process.execPath, ['src/index.js'], { cwd: process.cwd(), stdio: 'ignore' });
   // wait for health

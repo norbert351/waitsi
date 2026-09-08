@@ -25,7 +25,7 @@ async function runWait(handle, attend, agentKey = 'render') {
 
 before(async () => {
   process.env.PORT = String(PORT);
-  process.env.WAITSI_DB_PATH = `/tmp/waitsi_lb_${Date.now()}.db`;
+  process.env.WAITSI_DB_SCHEMA = 'lb_' + Date.now();
   proc = spawn(process.execPath, ['src/index.js'], { cwd: process.cwd(), stdio: 'ignore' });
   for (let i = 0; i < 40; i++) {
     try { const r = await fetch(`${base}/health`); if (r.ok) break; } catch {}

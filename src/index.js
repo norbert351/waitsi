@@ -1,4 +1,4 @@
-// WAITSI API server — zero-dependency HTTP + SSE live stream + static surface.
+// WAITSI API server — HTTP + SSE live stream + static surface on PostgreSQL.
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { resolve, extname, normalize } from 'node:path';
@@ -54,7 +54,7 @@ function readBody(req) {
 function serveStatic(res, pathname) {
   let rel = pathname === '/' ? '/index.html' : pathname;
   const ext = extname(rel);
-  if (!MIME[ext]) return false; // not a static asset we serve -> 404 fallthrough
+  if (!MIME[ext]) return false;
   const full = resolve(PUBLIC_DIR, '.' + normalize(rel));
   if (!full.startsWith(PUBLIC_DIR)) return false;
   if (!existsSync(full) || !statSync(full).isFile()) return false;
@@ -64,7 +64,6 @@ function serveStatic(res, pathname) {
   return true;
 }
 
-// Send one SSE frame. `data` is JSON; optional event name + id.
 function sseWrite(res, { event, id, data }) {
   if (event) res.write(`event: ${event}\n`);
   if (id !== undefined) res.write(`id: ${id}\n`);
@@ -83,14 +82,12 @@ const server = createServer(async (req, res) => {
   const query = Object.fromEntries(url.searchParams);
 
   try {
-    // CORS preflight for cross-origin embeddings (agent tools, builder surfaces).
     if (method === 'OPTIONS') {
       cors(res);
       res.writeHead(204);
       return res.end();
     }
 
-    // GET /health — liveness for the demo/deploy
     if (method === 'GET' && path === '/health') {
       return json(res, 200, { ok: true, service: 'waitsi', uptime: process.uptime() });
     }
@@ -100,7 +97,7 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const handle = (body.handle || '').trim();
       if (!handle) return json(res, 400, { error: 'handle required' });
-      const user = svc.getOrCreateUser(handle);
+      const user = await svc.getOrCreateUser(handle);
       return json(res, 201, user);
     }
 
@@ -109,14 +106,14 @@ const server = createServer(async (req, res) => {
       const body = await readBody(req);
       const handle = (body.handle || '').trim();
       if (!handle) return json(res, 400, { error: 'handle required' });
-      return json(res, 201, svc.startWait({ handle, agentKey: body.agentKey }));
+      return json(res, 201, await svc.startWait({ handle, agentKey: body.agentKey }));
     }
 
     // POST /waits/:id/tick — live world growth { handle, token }
     const tickMatch = path.match(/^\/waits\/(\d+)\/tick$/);
     if (method === 'POST' && tickMatch) {
       const body = await readBody(req);
-      return json(res, 200, svc.getLiveWait({
+      return json(res, 200, await svc.getLiveWait({
         handle: body.handle, token: body.token, sessionId: Number(tickMatch[1]),
       }));
     }
@@ -128,8 +125,8 @@ const server = createServer(async (req, res) => {
       const token = (query.token || '').trim();
       if (!handle) return json(res, 400, { error: 'handle required' });
       // Validate ownership BEFORE sending headers so an error can still be JSON.
-      const user = db.getOrCreateUser(handle);
-      const sess = db.getActiveSession(Number(streamMatch[1]));
+      const user = await db.getOrCreateUser(handle);
+      const sess = await db.getActiveSession(Number(streamMatch[1]));
       if (!sess || sess.user_id !== user.id) {
         return json(res, 404, { error: 'session not found or not yours' });
       }
@@ -145,16 +142,7 @@ const server = createServer(async (req, res) => {
       });
       res.flushHeaders();
       sseWrite(res, { event: 'open', data: { ok: true, sessionId: Number(streamMatch[1]) } });
-      // Start the stream now headers are flushed — emits 'hello' + 1/s ticks.
-      const stop = svc.streamWait({
-        handle,
-        sessionId: Number(streamMatch[1]),
-        token,
-        onEvent: (ev) => sseWrite(res, { event: 'message', data: ev }),
-      });
-      // End the interval server-side when the client disconnects OR the session
-      // completes/abandons (streamWait self-stops on non-active, but close covers
-      // client drop). streamWait's own interval already stops on non-active.
+      const stop = await svc.streamWait({ handle, sessionId: Number(streamMatch[1]), token, onEvent: (ev) => sseWrite(res, { event: 'message', data: ev }) });
       req.on('close', () => stop && stop());
       res.on('close', () => stop && stop());
       return;
@@ -164,7 +152,7 @@ const server = createServer(async (req, res) => {
     const completeMatch = path.match(/^\/waits\/(\d+)\/complete$/);
     if (method === 'POST' && completeMatch) {
       const body = await readBody(req);
-      return json(res, 200, svc.completeWait({
+      return json(res, 200, await svc.completeWait({
         handle: body.handle,
         token: body.token,
         sessionId: Number(completeMatch[1]),
@@ -177,7 +165,7 @@ const server = createServer(async (req, res) => {
     const abandonMatch = path.match(/^\/waits\/(\d+)\/abandon$/);
     if (method === 'POST' && abandonMatch) {
       const body = await readBody(req);
-      return json(res, 200, svc.abandonWait({
+      return json(res, 200, await svc.abandonWait({
         handle: body.handle, token: body.token, sessionId: Number(abandonMatch[1]),
       }));
     }
@@ -185,24 +173,24 @@ const server = createServer(async (req, res) => {
     // POST /payouts — Builder paid to wait: claim earned balance { handle, token }
     if (method === 'POST' && path === '/payouts') {
       const body = await readBody(req);
-      return json(res, 201, svc.claimPayout({ handle: body.handle, token: body.token }));
+      return json(res, 201, await svc.claimPayout({ handle: body.handle, token: body.token }));
     }
 
     // GET /board/:handle — the persistent scoreboard (vault view)
     if (method === 'GET' && path.startsWith('/board/')) {
       const handle = decodeURIComponent(path.slice('/board/'.length));
-      return json(res, 200, svc.getBoard(handle));
+      return json(res, 200, await svc.getBoard(handle));
     }
 
     // GET /leaderboard?limit= — public "$CMNS Vault" scoreboard
     if (method === 'GET' && path === '/leaderboard') {
       const limit = query.limit ? Number(query.limit) : 20;
-      return json(res, 200, { total: svc.getLeaderboard(limit).length, builders: svc.getLeaderboard(limit) });
+      return json(res, 200, { total: (await svc.getLeaderboard(limit)).length, builders: await svc.getLeaderboard(limit) });
     }
 
     // GET /discoveries — catalog for a sponsor-ops view
     if (method === 'GET' && path === '/discoveries') {
-      return json(res, 200, db.listActiveDiscoveries());
+      return json(res, 200, await db.listActiveDiscoveries());
     }
 
     // Static surface — the wait-surface UI itself (GET / -> wait-surface)
@@ -218,10 +206,10 @@ const server = createServer(async (req, res) => {
   }
 });
 
-db.initSchema();
+await db.initSchema();
 server.listen(PORT, HOST, () => {
   console.log(`WAITSI backend up on http://${HOST}:${PORT}`);
 });
 
-process.on('SIGINT', () => { db.closeDb(); process.exit(0); });
-process.on('SIGTERM', () => { db.closeDb(); process.exit(0); });
+process.on('SIGINT', () => { db.closeDb().then(() => process.exit(0)); });
+process.on('SIGTERM', () => { db.closeDb().then(() => process.exit(0)); });

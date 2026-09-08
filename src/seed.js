@@ -1,8 +1,8 @@
 // Seed the discovery catalog with the Sponsor Ad Network demo fixtures.
-import { db, initSchema } from './db.js';
+import { pool, initSchema, S } from './db.js';
 import { formatMicro } from './world.js';
 
-initSchema();
+await initSchema();
 
 const fixtures = [
   { sponsor: 'Commons Compute', title: 'Rent idle build capacity', category: 'infra', surface: 'a compute marketplace',
@@ -19,19 +19,21 @@ const fixtures = [
     cpm: 2000, budget: 1_800_000 },
 ];
 
-const existing = db.prepare('SELECT COUNT(*) AS n FROM discoveries').get().n;
+const existing = (await pool.query(`SELECT COUNT(*)::int AS n FROM ${S}discoveries`)).rows[0].n;
 if (existing === 0) {
-  const ins = db.prepare(
-    `INSERT INTO discoveries (sponsor, title, category, surface, cpm, budget_remaining)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  );
   for (const f of fixtures) {
-    ins.run(f.sponsor, f.title, f.category, f.surface, f.cpm, f.budget);
+    await pool.query(
+      `INSERT INTO ${S}discoveries (sponsor, title, category, surface, cpm, budget_remaining)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [f.sponsor, f.title, f.category, f.surface, f.cpm, f.budget],
+    );
   }
   console.log(`Seeded ${fixtures.length} discovery surfaces.`);
 } else {
   console.log('Discoveries already present — skipping seed.');
 }
 
-const total = db.prepare('SELECT COALESCE(SUM(budget_remaining),0) AS t, COUNT(*) AS n FROM discoveries').get();
-console.log(`Discovery budget remaining: ${formatMicro(total.t)} $CMNS across ${total.n} surfaces.`);
+const t = (await pool.query(`SELECT COALESCE(SUM(budget_remaining),0) AS t, COUNT(*)::int AS n FROM ${S}discoveries`)).rows[0];
+console.log(`Discovery budget remaining: ${formatMicro(t.t)} $CMNS across ${t.n} surfaces.`);
+
+await pool.end();

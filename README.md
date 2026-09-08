@@ -60,14 +60,29 @@ two waits on one handle and asserts the world strictly grew, never reset.
 
 ## Run
 
+Requires a PostgreSQL connection string (Neon, RDS, or any PG ≥ 14). Set it once:
+
+```bash
+export WAITSI_DATABASE_URL="postgresql://user:pass@host:5432/db"   # or DATABASE_URL
+export WAITSI_DB_SCHEMA="waitsi"                                     # optional namespace; recommended when sharing a DB
+```
+
 ```bash
 npm start        # :3120 — backend + wait-surface at /
 npm run seed     # seed sponsor discovery catalog
-npm run smoke    # 21 integration tests (auth, payouts, repeatability, …)
+npm run smoke    # 21 integration tests (auth, payouts, repeatability, …) — needs the DB
 ```
 
+The smoke suite runs each file in an isolated (auto-created) schema so tests never collide.
+
 ## Deploy note
-Zero external deps (only `node:sqlite`, Node ≥22). PORT is read from env. The persistent DB lives at `data/waitsi.db` (or `WAITSI_DB_PATH`), which is git-ignored so a fresh deploy starts clean unless you ship it.
+Node ≥22. The only runtime dependency is `pg` (PostgreSQL). `WAITSI_DATABASE_URL`
+**must** be present or the service refuses to boot — the connection value lives in
+env / Render, never in the repo. `render.yaml` ships a web service (not serverless,
+because the SSE stream must hold an open connection); seed + start run on boot.
+Set `WAITSI_DB_SCHEMA=waitsi` in Render to keep this service isolated when the Neon
+DB also hosts other apps (as this one does — its `public` schema belongs to another
+project).
 
 ## Judging alignment
 - Waiting Experience (30%): the wait becomes a fun, growing, paid experience
