@@ -413,6 +413,47 @@ $('#btnAbandon').addEventListener('click', abandonWait);
 $('#btnReconnect').addEventListener('click', reconnectStream);
 $('#btnLostBank').addEventListener('click', ()=>{ $('#connLost').classList.add('hidden'); bankWait(); });
 
+// ---- deep-link entry modes -------------------------------------------------
+// The surface is a LAYER over real agent/tool waits, so it must be able to
+// attach itself without a human clicking "Start":
+//   1. CLI-attached: ?handle=&agent=&session=&token=(&sponsor=&title=&surface=)
+//      — a waitsi CLI / agent tool already opened this session (POST /waits/start);
+//        the surface attaches to the live stream; the tool settles on exit.
+//   2. One-tap autostart: ?handle=&agent= — start a fresh paid wait instantly
+//        (paste-able demo link for judges: /?handle=judge&agent=your-agent)
+window.__linkedSession = false;
+function applyDeepLink(){
+  const q = new URLSearchParams(location.search);
+  const handle = (q.get('handle')||'').trim();
+  const agent  = (q.get('agent')||'').trim();
+  const session= (q.get('session')||'').trim();
+  const token  = (q.get('token')||'').trim();
+  if(handle && session && token){
+    // CLI-attached: hydrate inputs, attach to the already-open session stream.
+    window.__linkedSession = true;
+    S={id:session, handle, agent: agent||'your agent', token, bornMs:Date.now()};
+    $('#handle').value=handle; $('#agentKey').value=agent;
+    $('#handleChip').textContent='@'+handle; $('#handleChip').style.display='block';
+    const sp=q.get('sponsor');
+    if(sp) disco={discovery:{sponsor:sp, title:q.get('title')||'discovery surface', surface:q.get('surface')||'the commons'}};
+    show('waiting');
+    $('#livSess').textContent='#'+S.id;
+    $('#livAgent').textContent=esc(S.agent);
+    $('#coreLvl').innerHTML='–<span>LVL</span>';
+    $('#corePct').textContent='…';
+    $('#mCoins').textContent='–';
+    $('#vineN').textContent='0 / –';
+    armWatchdog(); markBeat();
+    log('terminal-linked session','live while your command runs — the CLI banks it on exit');
+    enterStream().catch(()=>{});
+  } else if(handle){
+    // One-tap autostart from a shared link.
+    $('#handle').value=handle; $('#agentKey').value=agent;
+    startWait();
+  }
+}
+applyDeepLink();
+
 function statusLive(lbl){const h=$('#hstatus');h.classList.remove('lost');h.classList.add('live');$('#hstatLabel').textContent=lbl||'LIVE';}
 function statusReady(){const h=$('#hstatus');h.classList.remove('live','lost');$('#hstatLabel').textContent='READY';}
 function statusLost(lbl){const h=$('#hstatus');h.classList.remove('live');h.classList.add('lost');$('#hstatLabel').textContent=lbl||'LOST';}
@@ -439,6 +480,17 @@ function armWatchdog(){
   watchdog=setInterval(()=>{
     if(!S){ clearInterval(watchdog); return; }
     if(Date.now()-lastBeat>9000){
+      if(window.__linkedSession){
+        // CLI-owned session: the tool banked it and closed the stream. End
+        // neutrally — the WV voucher lives in the terminal, not a LOST alarm.
+        if(es){es.close(); es=null;}
+        clearInterval(watchdog); watchdog=null;
+        clearInterval(tickTimer); tickTimer=null;
+        $('#connLost').classList.add('hidden');
+        statusReady();
+        log('session banked','your terminal holds the WV voucher — start another wait anytime');
+        return;
+      }
       // only flag if the stream is still trying and we truly heard nothing
       $('#connLost').classList.remove('hidden');
       statusLost('LOST');

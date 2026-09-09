@@ -5,6 +5,9 @@
   "description": "WAITSI — the waiting layer for AI. Backend.",
   "type": "module",
   "main": "src/index.js",
+  "bin": {
+    "waitsi": "./bin/waitsi.mjs"
+  },
   "engines": {
     "node": ">=22.0.0"
   },
@@ -12,6 +15,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "seed": "node src/seed.js",
+    "waitsi": "node bin/waitsi.mjs",
     "smoke": "node --test test/*.test.js"
   },
   "dependencies": {

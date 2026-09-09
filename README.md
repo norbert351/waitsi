@@ -50,6 +50,35 @@ scene) + the sponsor card while an agent thinks → `POST /complete` → banked 
 + ledger total + "$CMNS Vault" leaderboard. Mobile-first, dark living-commons
 terminal identity (see `design.md`).
 
+## Attach it to a real wait (deep-link + CLI)
+
+The surface is a *layer over any wait*, so it can attach itself with no clicks:
+
+- **One-tap autostart** — `/?handle=<you>&agent=<tool>` starts a fresh paid wait
+  instantly (paste this to a judge: `https://waitsi.onrender.com/?handle=judge&agent=your-agent`).
+- **CLI-attached** — a `waitsi` CLI/agent tool already opened the session
+  (`POST /waits/start`) and hands the surface `?handle=&agent=&session=&token=`;
+  the page attaches to the live SSE stream and the tool settles on exit.
+
+### The `waitsi` CLI — wrap any slow command
+
+```bash
+# run it straight from this repo:
+node bin/waitsi.mjs -- npm run build
+# or via npx from the public repo (no local clone needed):
+npx -y github:norbert351/waitsi --handle zubbycrypt -- npm test
+# against a local instance:
+WAITSI_BASE=http://localhost:3120 npm run waitsi -- -- node ./slow.js
+```
+
+What it does: `POST /waits/start` → opens the live surface in your browser →
+runs your command (stdout/stderr pass through) → on exit **banks** every waited
+second (XP + coins + your 70% share of discovery revenue) → **claims** the
+balance and prints a `WV-…` voucher → final board line. Exit code is preserved
+(so it's safe to chain in CI); a non-zero command still banks the wait — you
+waited through it. `--no-browser` for headless/CI, `--no-claim` to leave the
+balance claimable.
+
 ## Repeatability (15%) — how it's wired
 
 The repeat hook is the **persistent world**: `worlds` is keyed by user (not by wait), so
