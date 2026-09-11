@@ -17,3 +17,10 @@ services:
       # the service boots straight into db.js's "No database configured" throw.
       - key: WAITSI_DATABASE_URL
         sync: false
+      # Namespace every table into the `waitsi` schema. This Neon DB is SHARED:
+      # its `public.users` belongs to another app (id uuid + wallet_address), so
+      # unqualified DDL collides — "foreign key worlds_user_id_fkey cannot be
+      # implemented: integer and uuid". Setting this makes db.js emit
+      # waitsi.users / waitsi.worlds / … and sidesteps public entirely.
+      - key: WAITSI_DB_SCHEMA
+        value: waitsi
