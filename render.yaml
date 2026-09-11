@@ -12,3 +12,8 @@ services:
       - key: HOST
         value: 0.0.0.0
       # PORT is injected automatically by Render.
+      # Neon Postgres connection string — the secret's VALUE is set in the
+      # Render dashboard (sync: false keeps it out of the repo). Without this
+      # the service boots straight into db.js's "No database configured" throw.
+      - key: WAITSI_DATABASE_URL
+        sync: false
