@@ -193,6 +193,14 @@ const server = createServer(async (req, res) => {
       return json(res, 200, await db.listActiveDiscoveries());
     }
 
+    // GET /waits/active?handle= — every concurrent agent wait for one builder.
+    // The multi-agent view: N agents, ONE shared commons they all grow.
+    if (method === 'GET' && path === '/waits/active') {
+      const handle = (query.handle || '').trim();
+      if (!handle) return json(res, 400, { error: 'handle required' });
+      return json(res, 200, await svc.getActiveWaits({ handle }));
+    }
+
     // Static surface — the wait-surface UI itself (GET / -> wait-surface)
     if (method === 'GET' && serveStatic(res, path)) {
       return;

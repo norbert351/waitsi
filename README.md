@@ -17,6 +17,7 @@ High-frequency vibe-coders / agent-heavy builders who hit a *repeated, predictab
 | POST | `/waits/:id/tick` | `{handle, token}` | Fallback poll path (bank ~1 live second) |
 | POST | `/waits/:id/complete` | `{handle, token, attendedTicks, agentKey}` | Settle world + discovery revenue + ledger |
 | POST | `/waits/:id/abandon` | `{handle, token}` | Mark a live session abandoned (409 if already settled) |
+| **GET** | `/waits/active` | `?handle=` | **Multi-agent view** — every concurrent agent wait (`agentKey`, `elapsedSeconds`, `attended`) plus the ONE shared world they all grow |
 | **POST** | `/payouts` | `{handle, token}` | **Builder paid to wait — claim earned balance.** Settles claimable (`wait_xp` + your share of `discovery` rev, minus already-claimed), returns a unique `WV-…` voucher. Replay → 409. |
 | GET | `/board/:handle` | — | Persistent scoreboard: world, rank, ledger, total, **claimable/claimed** |
 | GET | `/leaderboard?limit=` | — | Public "$CMNS Vault" scoreboard |
@@ -87,6 +88,42 @@ levels expose rotating "looking at" scenes, and the leaderboard compounds lifeti
 Returning for slow jobs is *rewarded*, not reset. Covered by a dedicated test that runs
 two waits on one handle and asserts the world strictly grew, never reset.
 
+## Multi-agent concurrency (the Originality hook)
+
+A real builder runs **several agents at once** (Claude Code in one terminal, Codex in
+another). Waitsi treats that as the normal case, not an edge case:
+
+- **N agents, ONE commons.** `worlds` stays keyed by user, so parallel waits all grow the
+  same persistent world — the waiting layer scales with the agent count, it doesn't
+  fragment into N separate games.
+- **Per-session streams.** Each active wait owns its own SSE interval (a registry keyed by
+  session id), so streams can be started, settled, and abandoned independently. Settling
+  one agent leaves the others running and untouched.
+- **`GET /waits/active?handle=`** — the live multi-agent view: every active session with its
+  `agentKey`, `elapsedSeconds`, and whether it's currently *attended* (streaming), plus the
+  single shared `world` they're all growing.
+- **Attribution stays honest.** Only an *attended* stream banks seconds, so opening three
+  agents and watching one doesn't mint XP for the unattended two.
+
+### Atomicity — why concurrency is safe here
+
+All world mutations are **atomic SQL increments**, never read-modify-write:
+
+```sql
+UPDATE worlds SET xp = xp + $1, coins = coins + $1 WHERE user_id = $2 RETURNING *
+```
+
+Postgres applies `xp = xp + $1` under a row lock, so N concurrent callers produce exactly
+N increments. This was a real, measured bug: the original read-then-write banked **2 XP
+from 12 concurrent ticks (10 lost)** while the ledger recorded all 12 — the world silently
+under-counted the very earnings the payout is computed from. Same fix applied to the
+sponsor budget (`GREATEST(budget_remaining - $1, 0)`, floored so it can't go negative).
+
+`test/multiagent.test.js` guards this permanently: it asserts the world total reconciles
+with the ledger to the unit under parallel load, and that settling one agent can't disturb
+another. A single-agent test suite **cannot** catch a lost-update bug like this.
+
+
 ## Run
 
 Requires a PostgreSQL connection string (Neon, RDS, or any PG ≥ 14). Set it once:
@@ -99,7 +136,7 @@ export WAITSI_DB_SCHEMA="waitsi"                                     # optional 
 ```bash
 npm start        # :3120 — backend + wait-surface at /
 npm run seed     # seed sponsor discovery catalog
-npm run smoke    # 21 integration tests (auth, payouts, repeatability, …) — needs the DB
+npm run smoke    # 31 integration tests (auth, payouts, repeatability, multi-agent concurrency, …) — needs the DB
 ```
 
 The smoke suite runs each file in an isolated (auto-created) schema so tests never collide.

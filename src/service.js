@@ -37,6 +37,30 @@ async function authorize({ sessionId, handle, token }) {
   return session;
 }
 
+// ---- Live stream registry ------------------------------------------------
+// One interval per ACTIVE session. A builder runs several agents at once, so a
+// single global timer would be both wrong (it can only stop one session) and
+// unfair (unattended sessions would keep banking XP). Keyed by session id.
+const streams = new Map(); // sessionId -> { stop, startedAt }
+
+export function activeStreamCount() {
+  return streams.size;
+}
+
+// Stop the live stream for ONE session (called on complete/abandon so the
+// interval doesn't keep banking seconds into a settled wait).
+export function stopStream(sessionId) {
+  const s = streams.get(sessionId);
+  if (!s) return false;
+  s.stop();
+  streams.delete(sessionId);
+  return true;
+}
+
+export function stopAllStreams() {
+  for (const [id, s] of streams) { s.stop(); streams.delete(id); }
+}
+
 // ---- SSE live stream — pushes a world tick every second so the surface
 // animates WITHOUT the client polling. Each tick banks 1s into the world and
 // the ledger (Everything Counts). Ends when the session leaves 'active'.
@@ -51,16 +75,23 @@ export async function streamWait({ handle, sessionId, token, onEvent }) {
   const session0 = await db.getActiveSession(sessionId);
   onEvent({
     type: 'hello',
-    session: { id: session0.id, status: session0.status, startedAt: session0.started_at },
+    session: { id: session0.id, status: session0.status, agentKey: session0.agent_key, startedAt: session0.started_at },
     world: { ...w0, xpIntoLevel: l0.intoLevel, needForNext: l0.needForNext, looking: l0.looking },
   });
 
   let timer;
+  function stop() {
+    if (timer) clearInterval(timer);
+    timer = null;
+    const entry = streams.get(sessionId);
+    if (entry && entry.stop === stop) streams.delete(sessionId);
+  }
+
   async function tick() {
     try {
       const session = await db.getActiveSession(sessionId); // re-read so an external complete ends it
       if (!session || session.status !== 'active') return stop(); // completed/abandoned elsewhere
-      const world = await db.spendTimeInWorld(user.id, 1); // bank 1 live second
+      const world = await db.spendTimeInWorld(user.id, 1); // atomic bank of 1 live second
       await db.appendLedger({
         user_id: user.id,
         session_id: session.id,
@@ -72,16 +103,43 @@ export async function streamWait({ handle, sessionId, token, onEvent }) {
       onEvent({
         type: 'tick',
         world: { ...world, xpIntoLevel: lvl.intoLevel, needForNext: lvl.needForNext, looking: lvl.looking },
-        session: { id: session.id, status: session.status },
+        session: { id: session.id, status: session.status, agentKey: session.agent_key },
       });
     } catch (e) {
       stop(); // a DB error kills the stream rather than spam errors
     }
   }
 
-  function stop() { if (timer) clearInterval(timer); }
+  // Replace any existing stream for this session (client reconnected).
+  stopStream(sessionId);
+  streams.set(sessionId, { stop, startedAt: Date.now() });
   timer = setInterval(() => { tick(); }, 1000);
   return stop;
+}
+
+// All concurrent waits for a handle — the multi-agent view. Each active session
+// is listed with its own agent key and elapsed seconds, alongside the ONE shared
+// world they all grow. Attended (streaming) sessions are flagged so the surface
+// can show which agents are actually being watched.
+export async function getActiveWaits({ handle }) {
+  const user = await db.getOrCreateUser(handle);
+  const rows = await db.listActiveSessions(user.id);
+  const world = await db.getWorld(user.id);
+  const lvl = applyLevels(world.level, world.xp);
+  const now = Date.now();
+  return {
+    user: { id: user.id, handle: user.handle },
+    world: { ...world, xpIntoLevel: lvl.intoLevel, needForNext: lvl.needForNext, looking: lvl.looking },
+    agents: rows.map((r) => ({
+      sessionId: r.id,
+      agentKey: r.agent_key,
+      startedAt: r.started_at,
+      elapsedSeconds: Math.max(0, Math.floor((now - new Date(r.started_at).getTime()) / 1000)),
+      attended: streams.has(r.id),
+    })),
+    activeCount: rows.length,
+    attendedCount: rows.filter((r) => streams.has(r.id)).length,
+  };
 }
 
 // Start a wait: create the session, return world state + an allocated discovery
@@ -193,6 +251,7 @@ export async function completeWait({ handle, token, sessionId, attendedTicks, ag
   }
 
   await db.completeSession(session.id, { seconds: ticks, xp: bundle.wait.xp, coins: bundle.wait.coins });
+  stopStream(session.id); // stop this session's live interval — it is settled now
   const finalWorld = await db.getWorld(user.id);
 
   return {
@@ -321,5 +380,6 @@ export async function abandonWait({ handle, token, sessionId }) {
     throw err;
   }
   const ended = await db.abandonSession(sessionId);
+  stopStream(sessionId); // release the interval — an abandoned wait accrues nothing
   return { session: { id: ended.id, status: ended.status, seconds: ended.seconds } };
 }

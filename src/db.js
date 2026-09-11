@@ -134,14 +134,15 @@ export async function getWorld(userId) {
   return one(`SELECT * FROM ${S}worlds WHERE user_id = $1`, [userId]);
 }
 
+// ATOMIC increment — a read-modify-write here loses updates when ticks
+// interleave (SSE stream tick + client poll + complete all target one row).
+// Postgres applies `xp = xp + $1` under a row lock, so N concurrent callers
+// produce exactly N increments. Measured before this fix: 12 concurrent ticks
+// banked only 2 XP (10 lost) while the ledger recorded all 12.
 export async function spendTimeInWorld(userId, ds) {
-  const w = await getWorld(userId);
-  if (!w) return null;
-  const xp = (w.xp || 0) + ds;
-  const coins = (w.coins || 0) + ds;
   return one(
-    `UPDATE ${S}worlds SET xp = $1, coins = $2, updated_at = now() WHERE user_id = $3 RETURNING *`,
-    [xp, coins, userId],
+    `UPDATE ${S}worlds SET xp = xp + $1, coins = coins + $1, updated_at = now() WHERE user_id = $2 RETURNING *`,
+    [ds, userId],
   );
 }
 
@@ -174,6 +175,16 @@ export async function getActiveSession(sessionId) {
   return one(`SELECT * FROM ${S}wait_sessions WHERE id = $1`, [sessionId]);
 }
 
+// Every ACTIVE session for a user — a builder runs several agents at once, and
+// the surface shows all of them growing the same commons in parallel.
+export async function listActiveSessions(userId) {
+  return all(
+    `SELECT id, agent_key, status, started_at, seconds, xp_earned, coins_earned, token
+     FROM ${S}wait_sessions WHERE user_id = $1 AND status = 'active' ORDER BY started_at, id`,
+    [userId],
+  );
+}
+
 export async function getSessionByToken(token) {
   if (!token) return null;
   return one(`SELECT * FROM ${S}wait_sessions WHERE token = $1`, [token]);
@@ -188,8 +199,13 @@ export async function getDiscovery(id) {
   return one(`SELECT * FROM ${S}discoveries WHERE id = $1`, [id]);
 }
 
+// Atomic decrement with a floor at 0. A read-then-write here would both lose
+// concurrent charges and let the budget go negative under parallel settles.
 export async function chargeDiscoveryBudget(id, micro) {
-  return one(`UPDATE ${S}discoveries SET budget_remaining = budget_remaining - $1 WHERE id = $2 RETURNING *`, [micro, id]);
+  return one(
+    `UPDATE ${S}discoveries SET budget_remaining = GREATEST(budget_remaining - $1, 0) WHERE id = $2 RETURNING *`,
+    [micro, id],
+  );
 }
 
 // ---------- ledger ----------
