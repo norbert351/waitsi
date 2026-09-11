@@ -16,7 +16,7 @@
 // Env overrides: WAITSI_HANDLE, WAITSI_BASE.
 import { spawn } from 'node:child_process';
 
-const DEFAULT_BASE = process.env.WAITSI_BASE || 'https://waitsi.onrender.com';
+const DEFAULT_BASE = process.env.WAITSI_BASE || 'https://waitsi-j9qk.onrender.com';
 const DEFAULT_HANDLE = process.env.WAITSI_HANDLE || 'zubbycrypt';
 
 function parseArgs(argv) {
@@ -81,7 +81,7 @@ Usage:
 Options:
   --handle <name>   builder handle (env WAITSI_HANDLE, default zubbycrypt)
   --agent <key>     agent/tool label shown on the surface (default cli)
-  --base <url>      WAITSI service URL (env WAITSI_BASE, default https://waitsi.onrender.com)
+  --base <url>      WAITSI service URL (env WAITSI_BASE, default https://waitsi-j9qk.onrender.com)
   --no-browser      headless: don't try to open the live surface
   --no-claim        settle the wait but leave the balance claimable on the board
   -h, --help        this help

@@ -55,7 +55,7 @@ terminal identity (see `design.md`).
 The surface is a *layer over any wait*, so it can attach itself with no clicks:
 
 - **One-tap autostart** — `/?handle=<you>&agent=<tool>` starts a fresh paid wait
-  instantly (paste this to a judge: `https://waitsi.onrender.com/?handle=judge&agent=your-agent`).
+  instantly (paste this to a judge: `https://waitsi-j9qk.onrender.com/?handle=judge&agent=your-agent`).
 - **CLI-attached** — a `waitsi` CLI/agent tool already opened the session
   (`POST /waits/start`) and hands the surface `?handle=&agent=&session=&token=`;
   the page attaches to the live SSE stream and the tool settles on exit.
