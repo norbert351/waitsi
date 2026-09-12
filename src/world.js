@@ -24,6 +24,16 @@ export const MAX_WAIT_SECONDS = 4 * 60 * 60;
 // setup, tick-boundary rounding, one missed interval).
 export const ATTENDANCE_TOLERANCE = 3;
 
+// A one-time coin grant on a builder's FIRST settled wait.
+//
+// Why it exists: once attendance is server-clamped, coins accrue 1/second of
+// REAL waiting, so a fresh builder would need four unbroken minutes before the
+// cheapest upgrade became affordable — the shop would look permanently broken
+// to anyone evaluating the project in one sitting. This is an onboarding grant,
+// not a fudge: it is granted exactly once per builder, it is evented, and it is
+// explicitly NOT attached to the attested wait (it is a welcome, not earnings).
+export const FIRST_WAIT_BONUS = 100;
+
 export function ticksNeeded(level) {
   return Math.round(BASE * Math.pow(GROWTH, level - 1));
 }

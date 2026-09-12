@@ -21,7 +21,7 @@
 //      leaking other apps' columns from the shared Neon DB.
 import * as db from './db.js';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { applyLevels, formatMicro, MAX_WAIT_SECONDS, clampAttended } from './world.js';
+import { applyLevels, formatMicro, MAX_WAIT_SECONDS, clampAttended, FIRST_WAIT_BONUS } from './world.js';
 import { pickDiscovery, buildRewardBundle, MICRO, BUILDER_SHARE, CATEGORIES } from './engine.js';
 import { classifyAttestation } from './attest.js';
 import { effectsFor, touchStreak, recordMilestones } from './spend.js';
@@ -713,6 +713,9 @@ export async function completeWait({ handle, token, sessionId, attendedTicks, ag
   // insert that overflowed INTEGER threw AFTER the world was credited, leaving
   // an un-settleable session and world value with no ledger behind it.
   const unsettled = Math.max(0, ticks - alreadyCharged);
+  // Is this the builder's first settled wait? Asked BEFORE the settle flips the
+  // session to 'completed', so the count is still "waits before this one".
+  const priorWaits = await db.sessionCount(user.id);
   const result = await db.settleWait({
     user,
     session,
@@ -723,6 +726,7 @@ export async function completeWait({ handle, token, sessionId, attendedTicks, ag
     effects,
     agentKey: agentKey || session.agent_key,
     attestedTier: tier,
+    firstWaitBonus: priorWaits === 0 ? FIRST_WAIT_BONUS : 0,
   });
 
   // A CONFLICTING settle means another path completed this session between our

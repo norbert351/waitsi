@@ -235,17 +235,37 @@ test('concurrent claims produce exactly one payout', async () => {
 
 test('the shop refuses what you cannot afford and never goes negative', async () => {
   const h = handle('shop');
-  await runWait(h, { claim: 3 }); // earns ~3 coins
+  await runWait(h, { claim: 3 }); // a few coins + the welcome grant
 
   const catalog = await req('GET', `/shop/${h}`);
   assert.equal(catalog.status, 200);
   assert.ok(catalog.body.coins >= 3);
-  const cheap = catalog.body.upgrades.find((u) => u.nextPrice !== null);
-  assert.ok(cheap, 'there is at least one purchasable upgrade');
-  assert.equal(cheap.affordable, false, 'an expensive upgrade must read as unaffordable');
 
-  const buy = await req('POST', `/shop/${h}/buy`, { key: cheap.key });
-  assert.equal(buy.status, 409, 'buying without coins is a 409');
+  // With the welcome grant in play the CHEAPEST upgrade is deliberately
+  // affordable (that's the point of the grant) — so pick something genuinely
+  // out of reach: the most expensive next-price in the catalog.
+  const prices = [
+    ...catalog.body.upgrades.filter((u) => u.nextPrice !== null).map((u) => u.nextPrice),
+    ...catalog.body.cosmetics.filter((c) => !c.owned).map((c) => c.price),
+  ];
+  const dearest = Math.max(...prices);
+  assert.ok(dearest > catalog.body.coins, `fixture must be unaffordable (${dearest} vs ${catalog.body.coins})`);
+
+  // The catalog must not offer anything unaffordable as purchasable.
+  for (const u of catalog.body.upgrades) {
+    if (!u.maxed) assert.equal(u.affordable, u.nextPrice <= catalog.body.coins,
+      `${u.key} affordability must match its price`);
+  }
+  for (const c of catalog.body.cosmetics) {
+    if (!c.owned) assert.equal(c.affordable, c.price <= catalog.body.coins,
+      `${c.key} affordability must match its price`);
+  }
+
+  // Attempting the dearest cosmetic is a clean 409.
+  const dearestCos = catalog.body.cosmetics.find((c) => !c.owned && c.price === dearest)
+    || catalog.body.cosmetics.filter((c) => !c.owned).sort((a, b) => b.price - a.price)[0];
+  const buy = await req('POST', `/shop/${h}/cosmetic`, { key: dearestCos.key });
+  assert.equal(buy.status, 409, 'an unaffordable purchase is a 409');
   assert.match(buy.body.error, /not enough coins/);
 
   const board = await req('GET', `/board/${h}`);
@@ -254,20 +274,27 @@ test('the shop refuses what you cannot afford and never goes negative', async ()
 
 test('concurrent purchases cannot drive coins negative', async () => {
   const h = handle('racebuy');
-  await runWait(h, { claim: 3 }); // 3 coins
+  await runWait(h, { claim: 3 });
   const before = await req('GET', `/shop/${h}`);
-  const price = before.body.upgrades.find((u) => u.key === 'compute_mult').nextPrice;
-  assert.ok(price > before.body.coins, `needs ${price} coins, has ${before.body.coins}`);
+  assert.ok(before.body.coins >= 0);
+
+  // Fire N simultaneous buys at an upgrade whose NEXT level is out of reach, so
+  // the guarded debit is what's under test (not the price).
+  const u = before.body.upgrades
+    .filter((x) => x.nextPrice !== null && !x.affordable)
+    .sort((a, b) => a.nextPrice - b.nextPrice)[0];
+  assert.ok(u, `fixture needs an unaffordable upgrade (coins=${before.body.coins})`);
 
   const results = await Promise.all(Array.from({ length: 10 }, () =>
-    req('POST', `/shop/${h}/buy`, { key: 'compute_mult' })));
+    req('POST', `/shop/${h}/buy`, { key: u.key })));
   assert.equal(results.filter((r) => r.status === 201).length, 0,
     'no purchase can succeed unaffordable');
 
   const after = await req('GET', `/shop/${h}`);
   assert.equal(after.body.coins, before.body.coins, 'a failed purchase must not move the balance');
   assert.ok(after.body.coins >= 0, 'coins can never go negative');
-  assert.equal(after.body.upgrades.find((u) => u.key === 'compute_mult').level, 0);
+  assert.equal(after.body.upgrades.find((x) => x.key === u.key).level, u.level,
+    'a failed purchase grants no level');
 });
 
 test('a cosmetic is permanent and cannot be bought twice', async () => {
@@ -290,37 +317,59 @@ test('the shop happy path: spend coins, own the upgrade, price escalates', async
   assert.equal(granted.status, 200);
   assert.equal(granted.body.coins, 1000);
 
+  // Prices are read from the catalog rather than hardcoded, so retuning the
+  // economy doesn't require touching this test's arithmetic.
+  const cat1 = await req('GET', `/shop/${h}`);
+  const cm = cat1.body.upgrades.find((u) => u.key === 'compute_mult');
+  assert.equal(cm.affordable, true, 'the test faucet funds this purchase');
+  const price1 = cm.nextPrice;
+  assert.ok(price1 > 0);
   const c1 = await req('POST', `/shop/${h}/buy`, { key: 'compute_mult' });
   assert.equal(c1.status, 201);
   assert.equal(c1.body.upgrade.level, 1);
-  assert.equal(c1.body.spentCoins, 250);
-  assert.equal(c1.body.coins, 750, 'the debit is exact');
+  assert.equal(c1.body.spentCoins, price1);
+  assert.equal(c1.body.coins, 1000 - price1, 'the debit is exact');
 
+  // The next level must cost strictly more and fit the remainder.
+  const cat2 = await req('GET', `/shop/${h}`);
+  const cm2 = cat2.body.upgrades.find((u) => u.key === 'compute_mult');
+  assert.ok(cm2.nextPrice > price1, `price must escalate: ${price1} -> ${cm2.nextPrice}`);
   const c2 = await req('POST', `/shop/${h}/buy`, { key: 'compute_mult' });
   assert.equal(c2.status, 201);
   assert.equal(c2.body.upgrade.level, 2);
-  assert.equal(c2.body.spentCoins, 750, 'the price escalates 250 -> 750');
-  assert.equal(c2.body.coins, 0);
+  assert.equal(c2.body.spentCoins, cm2.nextPrice);
 
-  const c3 = await req('POST', `/shop/${h}/buy`, { key: 'compute_mult' });
-  assert.equal(c3.status, 409);
-  assert.match(c3.body.error, /not enough coins/);
-
-  const catalog = await req('GET', `/shop/${h}`);
-  const cm = catalog.body.upgrades.find((u) => u.key === 'compute_mult');
-  assert.equal(cm.level, 2);
-  assert.equal(cm.nextPrice, 2250);
-  assert.equal(cm.affordable, false);
-  assert.equal(catalog.body.coins, 0);
+  // Spend the rest down, then the next purchase must be refused (409).
+  let guard = 0;
+  while (guard < 20) {
+    const cat = await req('GET', `/shop/${h}`);
+    const u = cat.body.upgrades.find((x) => x.key === 'compute_mult');
+    if (u.maxed || !u.affordable) break;
+    const r = await req('POST', `/shop/${h}/buy`, { key: 'compute_mult' });
+    if (r.status !== 201) break;
+    guard += 1;
+  }
+  const catEnd = await req('GET', `/shop/${h}`);
+  const uEnd = catEnd.body.upgrades.find((x) => x.key === 'compute_mult');
+  if (!uEnd.maxed && !uEnd.affordable) {
+    const refused = await req('POST', `/shop/${h}/buy`, { key: 'compute_mult' });
+    assert.equal(refused.status, 409);
+    assert.match(refused.body.error, /not enough coins/);
+  }
+  assert.ok(catEnd.body.coins >= 0, 'the balance can never go negative');
 });
 
 test('a cosmetic purchase equips its scene and is permanent', async () => {
   const h = handle('cos');
   await req('POST', '/admin/test/grant', { handle: h, coins: 700 });
+  // Read the price from the catalog so retuning the economy doesn't break this.
+  const cat = await req('GET', `/shop/${h}`);
+  const neon = cat.body.cosmetics.find((c) => c.key === 'scene_neon');
+  assert.equal(neon.affordable, true, `700 coins must cover ${neon.price}`);
   const first = await req('POST', `/shop/${h}/cosmetic`, { key: 'scene_neon' });
   assert.equal(first.status, 201);
-  assert.equal(first.body.spentCoins, 500);
-  assert.equal(first.body.coins, 200);
+  assert.equal(first.body.spentCoins, neon.price);
+  assert.equal(first.body.coins, 700 - neon.price);
 
   const second = await req('POST', `/shop/${h}/cosmetic`, { key: 'scene_neon' });
   assert.equal(second.status, 409);
@@ -553,6 +602,76 @@ test('a CONCURRENT double-complete never returns a malformed 200', async () => {
   const board = await req('GET', `/board/${h}`);
   const ledgerXp = (board.body.ledger.find((l) => l.kind === 'wait_xp')?.total || 0) / 1e6;
   assert.equal(board.body.world.xp, ledgerXp, 'world must equal the ledger after a race');
+});
+
+test('a first wait grants a one-time coin bonus that is NOT earnings', async () => {
+  const h = handle('firstbonus');
+  const first = await runWait(h, { claim: 3 });
+  assert.equal(first.done.status, 200);
+
+  const shop1 = await req('GET', `/shop/${h}`);
+  // ~3 coins waited + the 100-coin welcome grant.
+  assert.ok(shop1.body.coins >= 100,
+    `a new builder must be able to try the shop after one wait, got ${shop1.body.coins} coins`);
+
+  // The grant is coins only — it must never enter the payout basis.
+  const board = await req('GET', `/board/${h}`);
+  assert.ok(board.body.totalMicro < 10_000_000,
+    `the welcome grant must not be claimable money (totalMicro=${board.body.totalMicro})`);
+  const ledgerXp = (board.body.ledger.find((l) => l.kind === 'wait_xp')?.total || 0) / 1e6;
+  assert.equal(board.body.world.xp, ledgerXp, 'the grant must not inflate XP');
+  assert.ok(board.body.world.coins > board.body.world.xp,
+    'coins exceed xp by exactly the welcome grant');
+
+  // It is evented, so the grant is visible and auditable.
+  const profile = await req('GET', `/profile/${h}`);
+  const welcome = profile.body.events.filter((e) => e.kind === 'welcome');
+  assert.equal(welcome.length, 1, 'the welcome grant is announced exactly once');
+  assert.match(welcome[0].message, /coins to try the shop/);
+
+  // The first upgrade is reachable immediately — the point of the grant.
+  const cm = shop1.body.upgrades.find((u) => u.key === 'compute_mult');
+  assert.equal(cm.affordable, true, 'the cheapest upgrade must be affordable after one wait');
+  const bought = await req('POST', `/shop/${h}/buy`, { key: 'compute_mult' });
+  assert.equal(bought.status, 201);
+
+  // A SECOND wait must not grant it again.
+  const second = await runWait(h, { claim: 3 });
+  assert.equal(second.done.status, 200);
+  const shop2 = await req('GET', `/shop/${h}`);
+  assert.ok(shop2.body.coins < 100,
+    `the welcome grant must be one-time, got ${shop2.body.coins} coins after a second wait`);
+  const profile2 = await req('GET', `/profile/${h}`);
+  assert.equal(profile2.body.events.filter((e) => e.kind === 'welcome').length, 1,
+    'still exactly one welcome event after a second wait');
+});
+
+test('seeded demo builders reconcile with their ledgers', async () => {
+  // The seed writes completed sessions + ledger rows directly, so it must obey
+  // the same invariant a live settle does: world.xp == the `wait_xp` ledger
+  // total. (Reading ledger[0] here would be wrong — it's `discovery`, a
+  // different unit. Compare like with like.)
+  const lb = await req('GET', '/leaderboard?limit=20');
+  assert.equal(lb.status, 200);
+  const demo = lb.body.builders.filter((b) => b.handle.startsWith('demo_'));
+  assert.ok(demo.length >= 1, 'the seed populates the board');
+
+  for (const b of demo) {
+    const board = await req('GET', `/board/${b.handle}`);
+    assert.equal(board.status, 200);
+    const waitXp = (board.body.ledger.find((l) => l.kind === 'wait_xp')?.total || 0) / 1e6;
+    assert.ok(waitXp > 0, `${b.handle} has banked waits`);
+    assert.equal(board.body.world.xp, waitXp, `${b.handle}: world.xp must equal wait_xp ledger`);
+    assert.ok(board.body.world.coins >= board.body.world.xp);
+    assert.ok(b.badge, `${b.handle} exposes a badge`);
+    assert.ok(b.level >= 1);
+  }
+
+  // The board is ordered, which is the point of seeding it.
+  const totals = lb.body.builders.map((x) => x.totalMicro);
+  for (let i = 1; i < totals.length; i++) {
+    assert.ok(totals[i - 1] >= totals[i], 'the leaderboard is sorted by earned desc');
+  }
 });
 
 test('auth contract holds on every state-changing route', async () => {

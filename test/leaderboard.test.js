@@ -73,7 +73,11 @@ test('leaderboard ranks builders by total earned, desc', async () => {
   assert.ok(idxBob >= 0 && idxAlice >= 0, 'both builders appear on the board');
   assert.ok(idxBob < idxAlice,
     `bob (${ranks[idxBob]?.t}) should be ranked above alice (${ranks[idxAlice]?.t})`);
-  assert.equal(arr[idxBob].rank, 1);
+  // bob out-earned alice, so his rank must be strictly better (smaller number).
+  // We do NOT assert rank === 1: the seed populates the board with long-standing
+  // demo builders who legitimately outrank a 10-second test wait.
+  assert.ok(arr[idxBob].rank < arr[idxAlice].rank,
+    `bob's rank (${arr[idxBob].rank}) must beat alice's (${arr[idxAlice].rank})`);
   assert.equal(arr[idxBob].waits, 1);
   assert.ok(arr[idxBob].badge, 'the leaderboard exposes the level badge');
 });

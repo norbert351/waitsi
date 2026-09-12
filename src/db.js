@@ -909,6 +909,7 @@ export async function bankIfActive({ userId, sessionId, seconds, ceiling }) {
 // Now either the whole settle lands or none of it does.
 export async function settleWait({
   user, session, ticks, unsettledSeconds, discovery, discoveryId, effects, agentKey, attestedTier,
+  firstWaitBonus = 0,
 }) {
   const client = await pool.connect();
   try {
@@ -923,15 +924,29 @@ export async function settleWait({
     const tail = Math.max(0, Math.floor(unsettledSeconds));
     const bonusXp = Math.floor((ticks / 10) * (effects ? effects.xpBonusPer10s : 0));
     const grant = tail + bonusXp; // stream tail + upgrade XP bonus
-    const world = grant > 0
+    // The first-wait bonus is COINS ONLY. Crediting it to XP too would hand a
+    // new builder a free level, which would muddy the progression curve the
+    // whole repeatability hook rests on.
+    const bonusCoins = Math.max(0, Math.floor(firstWaitBonus || 0));
+    const world = (grant > 0 || bonusCoins > 0)
       ? (await client.query(
-          `UPDATE ${S}worlds SET xp = xp + $1, coins = coins + $1, updated_at = now()
+          `UPDATE ${S}worlds SET xp = xp + $1, coins = coins + $1 + $3, updated_at = now()
            WHERE user_id = $2 RETURNING ${WORLD_COLS}`,
-          [grant, user.id],
+          [grant, user.id, bonusCoins],
         )).rows[0]
       : (await client.query(`SELECT ${WORLD_COLS} FROM ${S}worlds WHERE user_id = $1`, [user.id])).rows[0];
 
     if (!world) throw Object.assign(new Error('world missing for user'), { status: 500 });
+
+    // The welcome grant is a separate, labelled ledger-free credit (it is not
+    // earnings, so it must never appear in the payout basis).
+    if (bonusCoins > 0) {
+      await client.query(
+        `INSERT INTO ${S}events (user_id, kind, message, meta)
+         VALUES ($1, 'welcome', $2, $3)`,
+        [user.id, `Welcome — ${bonusCoins} coins to try the shop`, JSON.stringify({ coins: bonusCoins })],
+      );
+    }
 
     // 2) ledger — integer-safe by construction (grant is bounded by
     //    MAX_WAIT_SECONDS, so grant * MICRO can never overflow INTEGER).

@@ -113,6 +113,37 @@ the shop, upgrades have real effects (bigger builder share, compute subsidy bonu
 bonus XP, streak shields), and a daily streak rewards returning — with a shield charge
 absorbing a single missed day.
 
+### The coin economy
+
+Coins accrue **1 per second of verified waiting**, plus a **one-time 100-coin welcome
+grant** on a builder's first settled wait. That grant exists because once attendance is
+server-clamped, real seconds are the only income — without it a new builder would need
+four unbroken minutes before the cheapest upgrade became affordable, and the shop would
+look broken to anyone evaluating the project in one sitting.
+
+The grant is **coins only**: it writes no ledger row, so it is never claimable money and
+never inflates XP. It is evented (`welcome`) and granted exactly once per builder.
+
+Against that, the ladder is: first upgrade ~45 coins (≈45s of waiting), a full upgrade
+tree + scene ~3 minutes, the top cosmetic ~20 minutes.
+
+## Seeding
+
+`npm run seed` is idempotent and does two things:
+
+1. Seeds the sponsor catalog.
+2. Seeds a few **demo builders** with real completed sessions, ledger rows, levels,
+   badges and streaks, so the leaderboard has shape on first load rather than showing
+   an empty table.
+
+```bash
+SEED_DEMO_BUILDERS=0 npm run seed   # catalog only
+```
+
+Demo handles are prefixed `demo_`. Their ledger rows are written on the same basis a
+live settle uses (`cpm × seconds / 1000`, 70/30 split), so the board reconciles exactly
+as production data does — nothing is faked, and their payouts are real vouchers.
+
 ## Attach it to a real wait (deep-link + CLI)
 
 The surface is a *layer over any wait*, so it can attach itself with no clicks:

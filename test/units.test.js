@@ -11,7 +11,7 @@ import {
 } from '../src/world.js';
 import { buildRewardBundle, splitReward, revShareForTicks, pickDiscovery, BUILDER_SHARE } from '../src/engine.js';
 import { classifyAttestation } from '../src/attest.js';
-import { effectBps, upgradePrice, findUpgrade } from '../src/shop.js';
+import { effectBps, upgradePrice, findUpgrade, UPGRADES } from '../src/shop.js';
 
 // ---------------------------------------------------------------- the curve
 
@@ -212,15 +212,24 @@ test('attestation classifies by what the server actually observed', () => {
 test('upgrade prices escalate and cap at maxLevel', () => {
   const up = findUpgrade('compute_mult');
   assert.ok(up);
-  assert.equal(upgradePrice(up, 0), 250);
-  assert.equal(upgradePrice(up, 1), 750);
-  assert.equal(upgradePrice(up, 2), 2250);
+  // Assert the SHAPE, not exact numbers — the economy is a tuning knob and
+  // hardcoding 250/750/2250 here meant every price change broke the suite.
+  const p0 = upgradePrice(up, 0);
+  assert.ok(p0 > 0 && Number.isInteger(p0));
+  assert.ok(p0 <= 60, `the first upgrade must be reachable after a short wait (got ${p0})`);
   assert.equal(upgradePrice(up, up.maxLevel), null, 'a maxed upgrade has no next price');
   assert.equal(upgradePrice(null, 0), null);
 
-  // Every level costs more than the one before it.
+  // Every level costs strictly more than the one before it.
   for (let l = 0; l < up.maxLevel - 1; l++) {
-    assert.ok(upgradePrice(up, l + 1) > upgradePrice(up, l));
+    assert.ok(upgradePrice(up, l + 1) > upgradePrice(up, l),
+      `level ${l + 1} must cost more than ${l}`);
+  }
+  // Every upgrade's first level is affordable off one short wait + the welcome
+  // grant, so a new builder can always buy something.
+  for (const u of UPGRADES) {
+    assert.ok(upgradePrice(u, 0) <= 180,
+      `${u.key} L1 costs ${upgradePrice(u, 0)} — too far from the onboarding grant`);
   }
 });
 
