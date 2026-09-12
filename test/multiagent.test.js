@@ -8,8 +8,11 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { bootServer } from './harness.js';
 
 const PORT = 3197;
+// Fresh schema per run so parallel test files never collide on the shared DB.
+const SCHEMA = 'multiagent_' + Date.now();
 let proc;
 const base = `http://127.0.0.1:${PORT}`;
 
@@ -24,22 +27,13 @@ function req(method, path, body) {
 const handle = () => 'multi-' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
 
 before(async () => {
-  process.env.PORT = String(PORT);
-  process.env.WAITSI_DB_SCHEMA = 'multi_' + Date.now();
-  proc = spawn(process.execPath, ['src/index.js'], { cwd: process.cwd(), stdio: 'ignore', env: { ...process.env } });
-  for (let i = 0; i < 40; i++) {
-    try { const r = await fetch(`${base}/health`); if (r.ok) break; } catch {}
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  await new Promise((resolve) => {
-    const s = spawn(process.execPath, ['src/seed.js'], { cwd: process.cwd(), stdio: 'ignore', env: { ...process.env } });
-    s.on('exit', resolve);
-  });
+  const booted = await bootServer({ port: PORT, schema: SCHEMA });
+  proc = booted.proc;
 });
 
 after(() => { if (proc) proc.kill(); });
 
-test('atomic increments: N parallel ticks bank exactly N xp (no lost updates)', async () => {
+test('atomic increments: N parallel ticks never lose a bank (no lost updates)', async () => {
   const h = handle();
   const s = await req('POST', '/waits/start', { handle: h, agentKey: 'concurrent' });
   const { id, token } = s.body.session;
@@ -47,17 +41,26 @@ test('atomic increments: N parallel ticks bank exactly N xp (no lost updates)', 
 
   // Fire N ticks simultaneously at ONE session — the read-modify-write pattern
   // that previously lost ~83% of them.
+  //
+  // v2: a tick now banks ELAPSED seconds (not a flat +1), and the total is
+  // clamped to wall-clock. So the invariant is no longer "N ticks = N xp" — it
+  // is the one that actually protects the payout: whatever the world ends up
+  // holding must EQUAL the ledger, and N concurrent writers must not lose each
+  // other's increments (which would show up as world < ledger).
   await Promise.all(Array.from({ length: N }, () =>
     req('POST', `/waits/${id}/tick`, { handle: h, token })
   ));
 
   const board = await req('GET', `/board/${h}`);
   const world = board.body.world;
-
-  // world xp must equal ledger wait_xp exactly — no drift.
   const ledgerXp = (board.body.ledger.find((r) => r.kind === 'wait_xp')?.total || 0) / 1_000_000;
-  assert.equal(world.xp, ledgerXp, `world xp (${world.xp}) must equal ledger (${ledgerXp})`);
-  assert.equal(world.xp, N, `expected exactly ${N} xp from ${N} parallel ticks, got ${world.xp}`);
+
+  assert.equal(world.xp, ledgerXp, `world xp (${world.xp}) must equal ledger (${ledgerXp}) — no drift`);
+  assert.ok(world.xp >= 1, `12 parallel ticks must bank at least one second, got ${world.xp}`);
+  // And the bank can never exceed real elapsed time (the clamp holds under load).
+  const elapsed = Math.max(1, Math.floor((Date.now() - Date.parse(s.body.session.startedAt)) / 1000));
+  assert.ok(world.xp <= elapsed + 3,
+    `banked ${world.xp} over ${elapsed}s of wall clock — the clamp must hold under concurrency`);
 });
 
 test('multiple agents run concurrently on ONE handle against ONE shared world', async () => {
@@ -121,7 +124,7 @@ test('concurrent streams: world total reconciles with the ledger (no drift)', as
   const sessions = [];
   for (const agentKey of ['s1', 's2', 's3']) {
     const s = await req('POST', '/waits/start', { handle: h, agentKey });
-    sessions.push({ id: s.body.session.id, token: s.body.session.token });
+    sessions.push({ id: s.body.session.id, token: s.body.session.token, startedAt: s.body.session.startedAt });
   }
 
   // concurrently tick all three (proxy for concurrent SSE streams banking seconds)
@@ -133,7 +136,10 @@ test('concurrent streams: world total reconciles with the ledger (no drift)', as
   const board = await req('GET', `/board/${h}`);
   const ledgerXp = (board.body.ledger.find((r) => r.kind === 'wait_xp')?.total || 0) / 1_000_000;
   assert.equal(board.body.world.xp, ledgerXp, `world (${board.body.world.xp}) vs ledger (${ledgerXp}) drift`);
-  assert.equal(board.body.world.xp, 9, 'every one of the 9 concurrent ticks banked');
+  assert.ok(board.body.world.xp >= 1, 'the concurrent ticks banked something');
+  // One shared commons: the total is a single world, not a per-agent sum.
+  const view = await req('GET', `/waits/active?handle=${encodeURIComponent(h)}`);
+  assert.equal(view.body.world.user_id, board.body.user.id, 'all agents grow the SAME world row');
 });
 
 test('/waits/active requires a handle', async () => {

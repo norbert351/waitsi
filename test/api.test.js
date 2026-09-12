@@ -1,9 +1,18 @@
 // Integration tests for WAITSI core mechanics. Run: npm run smoke
+//
+// v2 note: a client can no longer DECLARE how many seconds it earned. The
+// server clamps `attendedTicks` against what it independently observed (the SSE
+// stream it banked, or wall-clock since the session opened). Tests that used to
+// POST `attendedTicks: 80` to a fresh session now have to actually stream, or
+// settle at their real age — see the `runWait` helper.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { bootServer } from './harness.js';
 
 const PORT = 3199;
+// Fresh schema per run so parallel test files never collide on the shared DB.
+const SCHEMA = 'api_' + Date.now();
 let proc;
 const base = `http://127.0.0.1:${PORT}`;
 
@@ -17,27 +26,31 @@ function req(method, path, body) {
 
 const TOTAL_MICRO = 1_000_000;
 
-before(async () => {
-  process.env.PORT = String(PORT);
-  process.env.WAITSI_DB_SCHEMA = 'api_' + Date.now();
-  // re-init schema by importing fresh modules via the server process
-  proc = spawn(process.execPath, ['src/index.js'], { cwd: process.cwd(), stdio: 'ignore' });
-  // wait for health
-  for (let i = 0; i < 40; i++) {
-    try {
-      const r = await fetch(`${base}/health`);
-      if (r.ok) break;
-    } catch {}
-    await new Promise((r) => setTimeout(r, 250));
+// Attach the live stream for `seconds` so the SERVER banks the wait, then
+// settle. Returns the session + complete body.
+async function streamWait(handle, seconds, agentKey = 'render') {
+  const s = await req('POST', '/waits/start', { handle, agentKey });
+  const { id, token } = s.body.session;
+  const ctl = new AbortController();
+  const resp = await fetch(`${base}/waits/${id}/stream?handle=${encodeURIComponent(handle)}&token=${token}`,
+    { signal: ctl.signal });
+  const reader = resp.body.getReader();
+  const started = Date.now();
+  while (Date.now() - started < seconds * 1000) {
+    const { done } = await reader.read();
+    if (done) break;
   }
-  // seed discoveries by hitting a direct import through the running server? Simpler: seed via a child seed run against same DB path.
-  await new Promise((resolve) => {
-    const s = spawn(process.execPath, ['src/seed.js'], {
-      cwd: process.cwd(), stdio: 'ignore',
-      env: { ...process.env },
-    });
-    s.on('exit', resolve);
+  ctl.abort();
+  try { await resp.body.cancel(); } catch {}
+  const done = await req('POST', `/waits/${id}/complete`, {
+    handle, token, attendedTicks: seconds, agentKey,
   });
+  return { id, token, done };
+}
+
+before(async () => {
+  const booted = await bootServer({ port: PORT, schema: SCHEMA });
+  proc = booted.proc;
 });
 
 after(() => {
@@ -59,38 +72,65 @@ test('wait session: start -> allocated discovery -> complete banks world + ledge
   const sessionId = started.body.session.id;
   const token = started.body.session.token;
 
-  // idempotent: same session+tick grows world (live)
-  await req('POST', `/waits/${sessionId}/tick`, { handle: 'alice', token });
-  await req('POST', `/waits/${sessionId}/tick`, { handle: 'alice', token });
+  // Live ticks bank real seconds server-side (the poll path is capped by
+  // wall-clock, so this is exactly what the poll is allowed to grant).
+  const t1 = await req('POST', `/waits/${sessionId}/tick`, { handle: 'alice', token });
+  assert.equal(t1.status, 200);
+  assert.ok(t1.body.verifiedSeconds >= 1, 'a tick banks the elapsed second');
+  await new Promise((r) => setTimeout(r, 1200));
+  const t2 = await req('POST', `/waits/${sessionId}/tick`, { handle: 'alice', token });
+  assert.equal(t2.status, 200);
+  assert.ok(t2.body.verifiedSeconds > t1.body.verifiedSeconds, 'the poll keeps banking');
 
   const done = await req('POST', `/waits/${sessionId}/complete`, {
     handle: 'alice', token, attendedTicks: 30, agentKey: 'render',
   });
   assert.equal(done.status, 200);
   assert.equal(done.body.session.status, 'completed');
-  assert.equal(done.body.session.seconds, 30);
-  assert.equal(done.body.session.xpEarned, 30);
-  assert.equal(done.body.world.xp, 32); // 30 completed + 2 ticks
+  // The client asked for 30s; the session is ~2s old, so the server grants what
+  // it can justify and says so.
+  assert.equal(done.body.session.clamped, true);
+  assert.ok(done.body.session.seconds >= 2 && done.body.session.seconds <= 40,
+    `banked ${done.body.session.seconds}s`);
+  assert.equal(done.body.session.xpEarned, done.body.session.seconds);
+  assert.equal(done.body.world.xp, done.body.session.seconds);
   assert.ok(done.body.level.level >= 1);
   assert.ok(done.body.discovery.builderCoins >= 0);
 
   const board = await req('GET', '/board/alice');
   assert.equal(board.body.completedWaits, 1);
-  assert.equal(board.body.world.xp, 32);
-  // ledger has wait_xp exactly = xp * 1e6
+  assert.equal(board.body.world.xp, done.body.session.seconds);
+  // ledger has wait_xp exactly = xp * 1e6 — the world and the ledger agree
   const waitXp = board.body.ledger.find((l) => l.kind === 'wait_xp');
-  assert.equal(waitXp.total, 32 * TOTAL_MICRO);
+  assert.equal(waitXp.total, done.body.session.seconds * TOTAL_MICRO);
 });
 
 test('level-up unlocks a new scene and needs exponential ticks', async () => {
-  const started = await req('POST', '/waits/start', { handle: 'bob' });
-  const sessionId = started.body.session.id;
-  const token = started.body.session.token;
-  const done = await req('POST', `/waits/${sessionId}/complete`, {
-    handle: 'bob', token, attendedTicks: 80,
+  // Level 2 needs 60 banked seconds; stream for ~7s to prove the stream and
+  // the level math agree without making the suite slow.
+  const s = await req('POST', '/waits/start', { handle: 'bob', agentKey: 'render' });
+  const { id, token } = s.body.session;
+  const ctl = new AbortController();
+  const resp = await fetch(`${base}/waits/${id}/stream?handle=bob&token=${token}`, { signal: ctl.signal });
+  const reader = resp.body.getReader();
+  const started = Date.now();
+  while (Date.now() - started < 7000) {
+    const { done } = await reader.read();
+    if (done) break;
+  }
+  ctl.abort();
+  try { await resp.body.cancel(); } catch {}
+
+  const done = await req('POST', `/waits/${id}/complete`, {
+    handle: 'bob', token, attendedTicks: 7, agentKey: 'render',
   });
-  assert.equal(done.body.level.level >= 2, true);
-  assert.notEqual(done.body.level.looking, 'an open field of prompts');
+  assert.equal(done.status, 200);
+  assert.ok(done.body.session.seconds >= 5, `banked ${done.body.session.seconds}s`);
+  assert.ok(done.body.level.level >= 1);
+  assert.ok(done.body.level.needForNext > 0, 'the level curve is exposed');
+  // Still level 1 below 60s — the curve is real, not decorative.
+  assert.equal(done.body.level.level, 1, 'under 60s stays at level 1');
+  assert.equal(done.body.level.looking, 'an open field of prompts');
 });
 
 test('session already completed returns 409 (no double-bank)', async () => {

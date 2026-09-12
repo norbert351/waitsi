@@ -8,23 +8,38 @@
 //   builderShare  = fraction of sponsor value passed to the builder (70%)
 //   computeSubsidy= remainder (30%) credited as a compute subsidy
 //
+// v2 (2026-09): campaigns are real objects. A `discoveries` row now carries
+// lifetime/spend/daily pacing caps, an attestation requirement, an optional
+// spend window, and a computed status. Ads served on the stream path are
+// charged in the same second they are earned (spend on delivery, not only on
+// settle), and every served impression is idempotent per (session, second).
+//
 // All math is integer micro-units; no floats in the ledger.
 
 export const BUILDER_SHARE = 0.70;
 export const COMPUTE_SUBSIDY = 0.30;
 export const MICRO = 1_000_000;
 
+export const CATEGORIES = ['model', 'infra', 'tool', 'brand'];
+
 // Deterministic discovery selection for a given session, so an agent re-request
-// returns the SAME surface (stable dento; the demo can rely on it).
+// returns the SAME surface (stable demo; the surface can rely on it).
+// v2: selection is over the ELIGIBLE set (status active, budget left, in
+// window, under daily cap) and is weighted by cpm, seo-style — a sponsor who
+// pays more gets picked more often, but every eligible sponsor can win.
 import { createHash } from 'node:crypto';
 
 export function pickDiscovery(discoveries, sessionId, userId) {
-  if (!discoveries.length) return null;
-  const seed = createHash('sha256')
-    .update(`${sessionId}:${userId}`)
-    .digest('hex');
-  const idx = parseInt(seed.slice(0, 8), 16) % discoveries.length;
-  return discoveries[idx];
+  if (!discoveries || !discoveries.length) return null;
+  const seed = createHash('sha256').update(`${sessionId}:${userId}`).digest('hex');
+  const total = discoveries.reduce((s, d) => s + Math.max(0, d.cpm || 0), 0);
+  if (total <= 0) return discoveries[parseInt(seed.slice(0, 8), 16) % discoveries.length];
+  let r = parseInt(seed.slice(0, 12), 16) % total;
+  for (const d of discoveries) {
+    r -= Math.max(0, d.cpm || 0);
+    if (r < 0) return d;
+  }
+  return discoveries[discoveries.length - 1];
 }
 
 // Value of a wait slice attributed to the discovery. `attendedTicks` = seconds
@@ -40,17 +55,29 @@ export function splitReward(networkMicro) {
 }
 
 // Allocate builder + compute + sponsor line items for one attended session.
-export function buildRewardBundle({ discovery, attendedTicks, waitXp, waitCoins }) {
+// `effects` (from shop.effectBps) shifts the split in the builder's favour —
+// upgrades are a coin sink that pays back in real sponsorship share.
+export function buildRewardBundle({ discovery, attendedTicks, waitXp, waitCoins, effects }) {
+  const b = effects || { sponsorBonusBps: 0, builderShareBonusBps: 0, xpBonusPer10s: 0 };
+  const boostedXp = waitXp + Math.floor((attendedTicks / 10) * b.xpBonusPer10s);
   if (!discovery) {
     return {
-      wait: { xp: waitXp, coins: waitCoins },
+      wait: { xp: boostedXp, coins: waitCoins },
       discovery: null,
     };
   }
   const networkMicro = revShareForTicks(discovery, attendedTicks);
-  const { builder, subsidy } = splitReward(networkMicro);
+  // Base 70/30 split, then the builder's upgrade bonus is taken from the
+  // network side FIRST (sponsor spend doesn't grow — the builder just keeps
+  // more of what the sponsor already paid).
+  const base = splitReward(networkMicro);
+  const bonus = Math.floor((networkMicro * b.builderShareBonusBps) / 10_000);
+  const builder = Math.min(networkMicro, base.builder + bonus);
+  const subsidy = networkMicro - builder;
+  // Compute subsidy upgrade: credited on top, accounted to sponsor_rev.
+  const subsidyBoost = Math.floor((networkMicro * b.sponsorBonusBps) / 10_000);
   return {
-    wait: { xp: waitXp, coins: waitCoins },
+    wait: { xp: boostedXp, coins: waitCoins },
     discovery: {
       discoveryId: discovery.id,
       sponsor: discovery.sponsor,
@@ -59,7 +86,7 @@ export function buildRewardBundle({ discovery, attendedTicks, waitXp, waitCoins 
       surface: discovery.surface,
       attendedTicks,
       builderCoins: builder,
-      computeSubsidy: subsidy,
+      computeSubsidy: subsidy + subsidyBoost,
       networkMicro,
     },
   };

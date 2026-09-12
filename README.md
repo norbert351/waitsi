@@ -10,29 +10,69 @@ High-frequency vibe-coders / agent-heavy builders who hit a *repeated, predictab
 
 | Method | Path | Body/Query | What it does |
 |---|---|---|---|
-| GET | `/health` | — | Liveness |
+| GET | `/health` | — | Liveness (`version`, `streams`, `maxWaitSeconds`) |
 | POST | `/users` | `{handle}` | Upsert a builder |
 | POST | `/waits/start` | `{handle, agentKey}` | Start wait session + allocate discovery + **return a session bearer token** |
-| **GET** | `/waits/:id/stream` | `?handle=&token=` | **SSE live stream** — pushes `open`→`hello`→a `tick` every second (world grows, ledger banks) while the session is active; ends on complete/abandon/disconnect. Requires the session token. |
-| POST | `/waits/:id/tick` | `{handle, token}` | Fallback poll path (bank ~1 live second) |
-| POST | `/waits/:id/complete` | `{handle, token, attendedTicks, agentKey}` | Settle world + discovery revenue + ledger |
+| **GET** | `/waits/:id/stream` | `?handle=&token=` | **SSE live stream** — 1/s frames while the session is active. Frames carry both `verifiedSeconds` (elapsed) and `committedSeconds` (settled). Requires the session token. |
+| **GET** | `/waits/hub` | `?handle=` | **Multi-agent SSE** — ONE stream listing every concurrent agent with per-agent verified seconds + the shared world. |
+| POST | `/waits/:id/tick` | `{handle, token}` | Fallback poll. Banks **elapsed** seconds; clamped to wall clock. |
+| **POST** | `/waits/:id/verify` | `{handle, token, observedSeconds, source}` | **Server-truth attestation.** The server clamps the reported wait against wall-clock and stamps the session. |
+| POST | `/waits/:id/complete` | `{handle, token, attendedTicks, agentKey}` | Settle. **Clamped** to what the server observed; returns `requestedSeconds` + `clamped` + `attestedTier`. |
 | POST | `/waits/:id/abandon` | `{handle, token}` | Mark a live session abandoned (409 if already settled) |
-| **GET** | `/waits/active` | `?handle=` | **Multi-agent view** — every concurrent agent wait (`agentKey`, `elapsedSeconds`, `attended`) plus the ONE shared world they all grow |
-| **POST** | `/payouts` | `{handle, token}` | **Builder paid to wait — claim earned balance.** Settles claimable (`wait_xp` + your share of `discovery` rev, minus already-claimed), returns a unique `WV-…` voucher. Replay → 409. |
-| GET | `/board/:handle` | — | Persistent scoreboard: world, rank, ledger, total, **claimable/claimed** |
-| GET | `/leaderboard?limit=` | — | Public "$CMNS Vault" scoreboard |
-| GET | `/discoveries` | — | Sponsor discovery catalog |
+| GET | `/waits/active` | `?handle=` | Multi-agent snapshot (JSON fallback for the hub) |
+| POST | `/payouts` | `{handle, token}` | **Claim earned balance** → unique `WV-…` voucher. Replay → 409. |
+| **POST** | `/payouts/:voucher/redeem` | `{txRef?}` | **Cash the voucher.** Single-use: replay → 409, unknown → 404. |
+| GET | `/shop/:handle` | — | Coin-sink catalog (upgrades + cosmetics, priced for this builder) |
+| POST | `/shop/:handle/buy` | `{key}` | Buy/level an upgrade. Guarded debit: 409 when unaffordable. |
+| POST | `/shop/:handle/cosmetic` | `{key}` | Buy a cosmetic unlock (permanent; 409 if already owned) |
+| GET | `/board/:handle` | — | Scoreboard: world, rank, ledger, claimable/claimed **+ outstanding** |
+| GET | `/leaderboard` | `?limit=` | Public "$CMNS Vault" scoreboard |
+| GET | `/profile/:handle` | — | **Shareable profile** — badge, streak, activity, voucher history, events |
+| GET | `/vault` | — | Global stats: issued vs redeemed, sponsor spend, builders, waited seconds |
+| GET | `/discoveries` | — | Eligible sponsor catalog (in-window, under budget + daily cap) |
+| GET | `/sponsor/:id` | — | **Advertiser delivery report** — spend, pacing, reach, verified/declared split |
+| GET | `/admin/campaigns` | — | Sponsor-ops view (all campaigns + status) |
+| POST | `/admin/campaigns` | `{sponsor, title, cpm, budgetMicro, …}` | Create (`id` absent) or patch (pause/resume/retarget) a campaign |
+| POST | `/admin/sweep` | `{stalledAfter}` | Close stalled sessions. `0` = every streamless active session. |
+| GET | `/og.svg` | `?handle=` | Share image (links no longer preview bare) |
 | GET | `/` | — | **The wait-surface UI** (self-contained SPA served from `public/`) |
+
+### Attestation tiers — the honest-labelling contract
+
+A wait is labelled by what the server actually observed, never by what the client claims:
+
+| Tier | Meaning |
+|---|---|
+| `sponsored` | Watched on the live surface; the server banked the seconds itself over a stream it owned. |
+| `streamed` | A stream ran but covered only part of the claimed wait. Server-clamped. |
+| `declared` | No live attendance (headless/CI). Still banks — but marked unverified and flagged to sponsors. |
 
 ## Auth & integrity
 
 - **Session-scoped bearer tokens.** `POST /waits/start` mints a unique `wv_…` token. Every
-  state-changing call (`tick`/`complete`/`abandon`), the SSE stream, and the payout claim
-  require it. Missing/wrong token → **401**; valid token presented under a different handle → **403**;
-  unknown session id → **404**. Foreign agents can't operate someone else's wait or claim their payout.
-- Replay-proof settlement: double-`complete` → **409**, double-claim → **409**, cross-handle clone → **403/404**.
+  state-changing call (`tick`/`complete`/`abandon`/`verify`), both SSE streams and the payout claim
+  require it. Missing/wrong token → **401**; valid token under a different handle → **403**;
+  unknown session id → **404**. Token comparison is constant-time.
+- **Attendance is server-clamped.** `complete` accepts `min(client claim, server ceiling + tolerance, MAX_WAIT_SECONDS)`. The ceiling is `max(stream-banked seconds, wall-clock since open)` — a client cannot mint a wait it didn't have.
+- **Spend happens on delivery.** Every attended second writes one idempotent `ad_spend` row (unique on session+second) charging the sponsor and crediting the builder, so sponsor money is never invisible until settle.
+- **Settle is all-or-nothing** in a transaction; the ledger can no longer overflow INTEGER and abort mid-settle.
+- Replay-proof: double-`complete` → **409**, double-claim → **409**, double-redeem → **409**.
 - Integer micro-units (no float ledger drift); **everything counts** — every rewarded second is banked to the ledger.
-- CORS is wide-open so the surface is embeddable into agent tools cross-origin. The surface carries the token automatically (SSE `?token=`, complete body).
+- CORS is wide-open so the surface is embeddable into agent tools cross-origin.
+
+## The integrity bugs this version fixes
+
+Each of these was a real, measured defect in v1. All are covered by `test/v2.test.js`:
+
+1. **Unbounded attendance (a mint hole).** A 7-second-old session claiming `attendedTicks: 100000` banked **+100,000 XP and +100,000 coins with an empty ledger**, and a second attempt crashed mid-write (`value "100000000000" is out of range for type integer`) *after* crediting the world — stranding the session `active` forever. Now clamped, and the ledger can't overflow by construction.
+2. **Concurrent polls multi-banked.** `grant = ceiling - banked` computed in app code is a read-modify-write: 12 racing polls banked **33 seconds over 6 seconds of wall clock**. Now a single compare-and-set (`claimBankWindow`).
+3. **An in-flight tick survived its own settle.** World XP crept 5 → 7 after the session completed. The settle now awaits the in-flight tick and the credit is guarded on session status in the same transaction.
+4. **Streams banked wall-clock wrong.** `setInterval(fn, 1000)` does not fire every second when each tick makes several DB round-trips — an 8s wait banked 4s. Now banks elapsed time.
+5. **The surface stuttered.** Frame delivery was coupled to ledger writes (one frame per ~3s). Now a cheap 1/s frame loop is independent of the 1/s bank loop.
+6. **A settle could return a malformed 200** when two completes raced. Now a clean 409.
+7. **A user created via another route had no `worlds` row**, so `/waits/start` threw an opaque 500 *after* creating the session.
+8. **Vouchers had no lifecycle** — issued as a string with no redemption. Now redeemable and single-use.
+
 
 ## Builder payouts (the money moves)
 
@@ -50,6 +90,28 @@ step). It drives the real backend: `POST /waits/start` → opens the **SSE strea
 scene) + the sponsor card while an agent thinks → `POST /complete` → banked summary
 + ledger total + "$CMNS Vault" leaderboard. Mobile-first, dark living-commons
 terminal identity (see `design.md`).
+
+### v2 surfaces (each one backed a route that had no UI before)
+
+- **Multi-agent hub card** — subscribes to `GET /waits/hub` and lists every concurrent
+  agent against the ONE commons they share, with per-agent `verifiedSeconds` and a
+  watched/idle flag. Only appears when more than one agent is running. This is the
+  originality hook made visible: N agents, one world.
+- **Shop** (`Spend coins` on the summary) — the coin sink. Upgrades are permanent and
+  change how every future wait pays; cosmetics unlock scenes. Guarded debit, so a
+  purchase you can't afford is a 409, never a negative balance.
+- **Profile** (`My commons`) — badge, streak, 14-day activity strip, and the voucher
+  ledger split into issued-unredeemed vs redeemed.
+- **Redeem** — the voucher lifecycle's missing step. Claim issues a `WV-…`; Redeem
+  cashes it once (replay → 409).
+
+## Progression (Repeatability 15%)
+
+Waiting accrues XP and coins; crossing an exponential threshold (`60 × 1.6^(n-1)`)
+advances the level, unlocks a badge, and rotates the scene. Coins are **spendable** in
+the shop, upgrades have real effects (bigger builder share, compute subsidy bonus,
+bonus XP, streak shields), and a daily streak rewards returning — with a shield charge
+absorbing a single missed day.
 
 ## Attach it to a real wait (deep-link + CLI)
 
@@ -136,10 +198,25 @@ export WAITSI_DB_SCHEMA="waitsi"                                     # optional 
 ```bash
 npm start        # :3120 — backend + wait-surface at /
 npm run seed     # seed sponsor discovery catalog
-npm run smoke    # 31 integration tests (auth, payouts, repeatability, multi-agent concurrency, …) — needs the DB
+npm run smoke    # 71 tests: 12 pure unit tests + 59 integration (auth, payouts, vouchers,
+                 # redemption, shop, streaks, attestation, multi-agent hub, sponsor ops)
 ```
 
 The smoke suite runs each file in an isolated (auto-created) schema so tests never collide.
+Every file also gets its own port — `node --test` runs test **files** in parallel, and two
+servers on one port means requests land on the wrong service. `test/harness.js` resolves the
+DB URL (env → `/tmp/wdb_url.txt`), forces IPv4-first DNS, captures the child's stderr, and
+fails loudly with the real boot error instead of an opaque `fetch failed`.
+
+Run the fast half alone while iterating — it needs no server:
+
+```bash
+node --test test/units.test.js     # 12 tests, ~140ms — level curve, clamp, split math, pricing
+```
+
+**Admin token.** `/admin/campaigns` and `/admin/sweep` are operator routes. Set
+`WAITSI_ADMIN_TOKEN` to require `Authorization: Bearer <token>`; with it unset the routes are
+open and the response says so (`unguarded: true`) rather than pretending to be safe.
 
 ## Deploy note
 Node ≥22. The only runtime dependency is `pg` (PostgreSQL). `WAITSI_DATABASE_URL`

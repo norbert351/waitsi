@@ -2,8 +2,11 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { bootServer } from './harness.js';
 
-const PORT = 3197;
+const PORT = 3196;
+// Fresh schema per run so parallel test files never collide on the shared DB.
+const SCHEMA = 'payouts_' + Date.now();
 let proc;
 const base = `http://127.0.0.1:${PORT}`;
 
@@ -16,32 +19,64 @@ function req(method, path, body) {
 }
 
 // Start a session and complete it, returning the owning token + complete body.
+// Start a session, STREAM it for `attend` seconds so the server banks the real
+// wait, then settle. (v2: a client can no longer declare its own seconds — the
+// server clamps `attendedTicks` against what it independently observed.)
 async function bankWait(handle, attend, agentKey = 'render') {
   const s = await req('POST', '/waits/start', { handle, agentKey });
+  // Diagnose the START too — an undefined read on `.session` two lines later is
+  // unhelpful; the real cause is whatever /waits/start answered.
+  if (!s.body || !s.body.session) {
+    throw new Error(`/waits/start returned HTTP ${s.status}: ${JSON.stringify(s.body)} (handle=${handle})`);
+  }
   const sid = s.body.session.id;
   const token = s.body.session.token;
+  if (attend > 0) {
+    const ctl = new AbortController();
+    const resp = await fetch(`${base}/waits/${sid}/stream?handle=${encodeURIComponent(handle)}&token=${token}`,
+      { signal: ctl.signal });
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    const streamStartedAt = Date.now();
+    while (Date.now() - streamStartedAt < attend * 1000) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+    }
+    ctl.abort();
+    try { await resp.body.cancel(); } catch {}
+    // Settle on the WALL-CLOCK duration actually streamed — what the real CLI
+    // and surface do. The server validates it against its own elapsed clock, so
+    // an honest client is never clamped and never under-claims.
+    const elapsed = Math.max(1, Math.round((Date.now() - streamStartedAt) / 1000));
+    const done = await req('POST', `/waits/${sid}/complete`, {
+      handle, token, attendedTicks: elapsed, agentKey,
+    });
+    // Fail with the ACTUAL body when the settle doesn't return a session, so a
+    // malformed response is diagnosable instead of showing up two lines later
+    // as "Cannot read properties of undefined".
+    if (!done.body || !done.body.session) {
+      throw new Error(
+        `settle returned HTTP ${done.status} without a session body: ${JSON.stringify(done.body)} `
+        + `(handle=${handle} session=${sid} attendedTicks=${elapsed})`,
+      );
+    }
+    return { sid, token, done, verified: done.body.session.seconds };
+  }
   const done = await req('POST', `/waits/${sid}/complete`, { handle, token, attendedTicks: attend, agentKey });
-  return { sid, token, done };
+  return { sid, token, done, verified: 0 };
 }
 
 before(async () => {
-  process.env.PORT = String(PORT);
-  process.env.WAITSI_DB_SCHEMA = 'pay_' + Date.now();
-  proc = spawn(process.execPath, ['src/index.js'], { cwd: process.cwd(), stdio: 'ignore' });
-  for (let i = 0; i < 40; i++) {
-    try { const r = await fetch(`${base}/health`); if (r.ok) break; } catch {}
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  await new Promise((resolve) => {
-    const s = spawn(process.execPath, ['src/seed.js'], { cwd: process.cwd(), stdio: 'ignore', env: { ...process.env } });
-    s.on('exit', resolve);
-  });
+  const booted = await bootServer({ port: PORT, schema: SCHEMA });
+  proc = booted.proc;
 });
 
 after(() => { if (proc) proc.kill(); });
 
 test('payout claim: issue a voucher for earned balance, then reject replay (409)', async () => {
-  const { token } = await bankWait('paid_builder', 50); // 50 xp + discovery share
+  const { token } = await bankWait('paid_builder', 8); // a real watched wait
   // earned > 0, nothing claimed yet
   const claim = await req('POST', '/payouts', { handle: 'paid_builder', token });
   assert.equal(claim.status, 201);
@@ -62,7 +97,7 @@ test('payout claim: issue a voucher for earned balance, then reject replay (409)
 });
 
 test('payout requires a valid owned session token (401)', async () => {
-  const { token } = await bankWait('pay_own', 10);
+  const { token } = await bankWait('pay_own', 4);
   const stolen = await req('POST', '/payouts', { handle: 'pay_thief', token });
   assert.equal(stolen.status, 401);
   const missing = await req('POST', '/payouts', { handle: 'pay_own', token: '' });
@@ -78,8 +113,20 @@ test('a builder with no earned balance cannot claim (409)', async () => {
 
 // --- Repeatability (15%): the persistent world is the repeat hook ----
 test('repeat waits build on ONE persistent world (never resets) — the Repeatability hook', async () => {
-  const first = await bankWait('repeat_me', 75);   // crosses into lvl 2
-  assert.equal(first.done.body.level.level >= 2, true);
+  // v2: the level boundary is a 60-second wall-clock wait, which is too slow to
+  // stream in a suite. What matters for Repeatability is the MECHANISM: the
+  // world persists across sessions, strictly grows, and never resets. That is
+  // asserted directly; the level curve itself is covered by its own unit test.
+  const first = await bankWait('repeat_me', 6);
+  // Diagnose a malformed settle with the real body instead of an undefined read.
+  assert.ok(first.done && first.done.body && first.done.body.session,
+    `first settle returned ${first.done && first.done.status}: ${JSON.stringify(first.done && first.done.body)}`);
+  assert.equal(first.done.status, 200);
+  // A 6s stream settles at ~5-6s of wall clock. Assert it banked a real wait
+  // (not zero, not a clamped sliver) without pinning the exact tick count.
+  assert.ok(first.done.body.session.seconds >= 4,
+    `first wait banked ${first.done.body.session.seconds}s of a ~6s stream`);
+
   const board1 = await req('GET', '/board/repeat_me');
   const lvl1 = board1.body.world.level;
   const xp1 = board1.body.world.xp;
@@ -87,14 +134,31 @@ test('repeat waits build on ONE persistent world (never resets) — the Repeatab
   const waits1 = board1.body.completedWaits;
 
   // second wait on the SAME handle — continued progression, cumulative ledgers
-  const second = await bankWait('repeat_me', 40);
+  const second = await bankWait('repeat_me', 6);
+  assert.equal(second.done.status, 200);
   const board2 = await req('GET', '/board/repeat_me');
   assert.equal(board2.body.completedWaits, waits1 + 1);
   // world xp strictly grows (not reset to 0 / not per-session)
   assert.ok(board2.body.world.xp > xp1, `xp grew ${xp1} -> ${board2.body.world.xp}`);
-  assert.ok(board2.body.world.coins > coins1);
+  assert.ok(board2.body.world.coins > coins1, `coins grew ${coins1} -> ${board2.body.world.coins}`);
   // level never regresses
   assert.ok(board2.body.world.level >= lvl1);
-  // scene rotated toward later flavor (repeatability feels new)
-  assert.notEqual(board2.body.world.looking, 'the commons');
+  // the world is ONE row per builder, not one per wait
+  assert.equal(board2.body.world.user_id, board1.body.world.user_id,
+    'repeat waits must grow the SAME world row');
+  // The scene is a real string (it only rotates on level-up, which needs 60s —
+  // covered by the unit suite). What matters here is that the world persisted
+  // and kept a coherent scene value across both waits.
+  assert.equal(typeof board2.body.world.looking, 'string');
+  assert.ok(board2.body.world.looking.length > 0);
+  // The ledger accumulated across both waits rather than resetting per-session.
+  // Compare like with like: `wait_xp` is the ledger kind denominated in banked
+  // seconds, so it must equal the world's xp. (`discovery`/`sponsor_rev` are
+  // micro-CMNS revenue — a different unit, deliberately not summed here.)
+  const waitXpMicro = board2.body.ledger.find((l) => l.kind === 'wait_xp')?.total || 0;
+  assert.ok(waitXpMicro > 0, 'the ledger is cumulative across waits');
+  assert.equal(board2.body.world.xp, waitXpMicro / 1e6,
+    'the world equals the wait_xp ledger that pays it out');
+  assert.ok(board2.body.ledger.some((l) => l.kind === 'discovery'),
+    'sponsor revenue was attributed across the waits');
 });

@@ -288,6 +288,13 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px;
       <span class="pill"><span class="inv">LIVE</span> · session <span id="livSess">#—</span></span>
     </div>
     <div class="howto"><span class="lab">HOW TO READ</span><span>Everything below is <b>live</b> — the vine fills each second you wait, and the sponsor is why you're paid to look.</span></div>
+    <!-- v2: N agents, ONE commons. /waits/hub existed with no surface, so a
+         builder running three agents had no way to watch them together. -->
+    <div class="card" id="hubCard" style="margin-bottom:18px;display:none">
+      <h4>Your agents · one commons</h4>
+      <div id="hubAgents"></div>
+      <div class="meta" id="hubFoot" style="margin-top:8px;color:var(--text-3);font-size:11px">—</div>
+    </div>
     <div class="grid">
       <!-- WORLD -->
       <div class="card world">
@@ -342,6 +349,65 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px;
     </div>
   </section>
 
+  <!-- SHOP (v2: the coin sink — coins earned by waiting are SPENT here) -->
+  <section id="view-shop" class="surface">
+    <div class="live-head">
+      <div class="now-waiting">Spend your <em>coins</em></div>
+      <span class="pill"><span class="inv" id="shopCoins">0</span> coins</span>
+    </div>
+    <div class="howto"><span class="lab">HOW TO READ</span><span>Upgrades are <b>permanent</b> and change how every future wait pays. Cosmetics unlock new scenes.</span></div>
+    <div class="card" style="margin-bottom:14px">
+      <h4>Upgrades</h4>
+      <div id="shopUpgrades"></div>
+    </div>
+    <div class="card">
+      <h4>Cosmetics</h4>
+      <div id="shopCosmetics"></div>
+    </div>
+    <div class="error-text hidden" id="shopErr"></div>
+    <div class="cta-row" style="margin-top:18px">
+      <button class="btn btn-ghost" id="btnShopBack" style="flex:1">Back</button>
+    </div>
+  </section>
+
+  <!-- PROFILE (v2: the shareable builder page — there was nowhere to link to) -->
+  <section id="view-profile" class="surface">
+    <div class="live-head">
+      <div class="now-waiting">@<em id="profHandle">—</em></div>
+      <span class="pill" id="profBadge">—</span>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <h4>Your commons</h4>
+        <div class="world-meta">
+          <div class="met"><div class="k">Level</div><div class="v sprout" id="profLevel">1</div><div class="d" id="profScene">—</div></div>
+          <div class="met"><div class="k">Coins</div><div class="v rum" id="profCoins">0</div><div class="d">spendable</div></div>
+          <div class="met"><div class="k">Streak</div><div class="v verd" id="profStreak">0</div><div class="d">days running</div></div>
+          <div class="met"><div class="k">Waits banked</div><div class="v" id="profWaits">0</div><div class="d">sessions</div></div>
+        </div>
+        <div class="scene" style="margin-top:14px">
+          <div class="lab">Activity · last 14 days</div>
+          <div id="profActivity" class="txt">—</div>
+        </div>
+      </div>
+      <div class="card">
+        <h4>Money</h4>
+        <div class="earn" style="flex-direction:column;align-items:stretch;gap:6px">
+          <div style="display:flex;justify-content:space-between"><span class="lab">Lifetime earned</span><span class="amt" id="profEarned">0</span></div>
+          <div style="display:flex;justify-content:space-between"><span class="lab">Issued, unredeemed</span><span class="amt" id="profOutstanding">0</span></div>
+          <div style="display:flex;justify-content:space-between"><span class="lab">Redeemed</span><span class="amt" id="profRedeemed">0</span></div>
+        </div>
+        <h4 style="margin-top:18px">Vouchers</h4>
+        <div id="profPayouts" class="txt" style="font-size:12px">—</div>
+        <h4 style="margin-top:18px">Recent events</h4>
+        <div id="profEvents" class="logfeed" style="max-height:200px;overflow:auto">—</div>
+      </div>
+    </div>
+    <div class="cta-row" style="margin-top:18px">
+      <button class="btn btn-ghost" id="btnProfileBack" style="flex:1">Back</button>
+    </div>
+  </section>
+
   <!-- COMPLETE -->
   <section id="view-complete" class="surface">
     <div class="state-box" style="max-width:520px;text-align:left">
@@ -376,10 +442,19 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px;
         <div class="lab">Voucher issued — cash your wait</div>
         <div class="vcode" id="voucherCode">—</div>
         <div class="meta" id="voucherMeta">—</div>
+        <!-- v2: the voucher is redeemable. v1 issued a string with no lifecycle,
+             so "cash your wait" was a promise the system couldn't keep. -->
+        <div class="cta-row" style="margin-top:10px">
+          <button class="btn btn-primary" id="btnRedeem" style="flex:1">Redeem voucher</button>
+        </div>
+        <div class="meta hidden" id="redeemMeta"
+             style="margin-top:8px;color:var(--sprout)">—</div>
       </div>
       <div class="error-text hidden" id="claimErr"></div>
       <div class="cta-row" style="margin-top:18px">
         <button class="btn btn-primary" id="btnAgain" style="flex:1">Wait again</button>
+        <button class="btn btn-ghost" id="btnShop" style="flex:1">Spend coins</button>
+        <button class="btn btn-ghost" id="btnProfile" style="flex:1">My commons</button>
       </div>
       <div class="mini-lb">
         <div class="h">$CMNS VAULT · leaderboard</div>
@@ -462,6 +537,7 @@ function statusLost(lbl){const h=$('#hstatus');h.classList.remove('live');h.clas
 // timers/watchdog, hide the loss banner, return the header to idle.
 function resetAfterExit(){
   if(es)es.close(); es=null;
+  closeHub(); // v2: release the multi-agent stream too, or it leaks a connection
   clearInterval(tickTimer); tickTimer=null;
   clearInterval(watchdog); watchdog=null;
   lastBeat=0; S=null;
@@ -588,6 +664,7 @@ function primeWorld(w){
   clearInterval(tickTimer);
   tickTimer=setInterval(()=>{ $('#mTimer').textContent=fmtTimer(Math.floor((Date.now()-S.bornMs)/1000)); },250);
   log('stream open','· waiting layer live');
+  openHub(); // v2: show every concurrent agent on ONE commons
 }
 function applyTick(w){
   if(w.level!==lastLevel){ lastLevel=w.level; flashCore(); log('LEVEL '+w.level,'scene unlocked'); }
@@ -638,6 +715,11 @@ async function claimPayout(){
     $('#voucherBox').classList.remove('hidden');
     $('#voucherBox').classList.add('ok');
     $('#voucherCode').textContent=c.payout.voucher;
+    // v2: remember the voucher on the session so the Redeem button can use it.
+    S.voucher=c.payout.voucher;
+    const rb=$('#btnRedeem');
+    rb.disabled=false; rb.textContent='Redeem voucher';
+    $('#redeemMeta').classList.add('hidden');
     $('#voucherMeta').textContent='Claimed '+c.payout.amountStr+' $CMNS · status: '+c.payout.status+
       ' · claimable remaining: '+c.claimableRemaining+' $CMNS';
     $('#claimAmt').innerHTML=c.payout.amountStr+' <small>$CMNS</small>';
@@ -649,8 +731,160 @@ async function claimPayout(){
   }
 }
 
+// --- multi-agent hub: ONE stream for ALL concurrent agents -----------------
+// Subscribes to /waits/hub, which pushes a snapshot every second listing every
+// active session with its own verified seconds. The card only appears when more
+// than one agent is running (a single agent already has the main world panel).
+let hubEs=null;
+function openHub(){
+  if(hubEs||!S) return;
+  hubEs=new EventSource('/waits/hub?handle='+encodeURIComponent(S.handle));
+  hubEs.addEventListener('hub',(ev)=>{
+    let d; try{ d=JSON.parse(ev.data); }catch{ return; }
+    const agents=d.agents||[];
+    if(agents.length<2){ $('#hubCard').style.display='none'; return; }
+    $('#hubCard').style.display='block';
+    $('#hubAgents').innerHTML=agents.map(a=>
+      '<div class="lb-row"><span class="nm">'+esc(a.agentKey)
+      +' <span style="color:var(--text-3);font-size:11px">#'+a.sessionId+'</span></span>'
+      +'<span style="color:'+(a.attended?'var(--sprout)':'var(--text-3)')+';font-size:11px">'
+      +(a.attended?'watched':'idle')+'</span>'
+      +'<span class="amo">'+a.verifiedSeconds+'s verified</span></div>').join('');
+    $('#hubFoot').textContent=agents.length+' agents growing ONE commons (level '+d.world.level
+      +', '+d.world.xp+' XP) · '+d.attendedCount+' currently watched';
+  });
+  hubEs.addEventListener('error',()=>{ /* EventSource auto-retries */ });
+}
+function closeHub(){ if(hubEs){ hubEs.close(); hubEs=null; } $('#hubCard').style.display='none'; }
+
+// ---- v2 views: redeem, shop, profile -------------------------------------
+// Every one of these talks to endpoints that existed with NO ui before.
+
+// The views map must know about the new surfaces or show() can't route to them.
+views.shop='#view-shop'; views.profile='#view-profile';
+
+$('#btnShop').addEventListener('click', openShop);
+$('#btnProfile').addEventListener('click', openProfile);
+$('#btnShopBack').addEventListener('click', ()=>{ show('complete'); });
+$('#btnProfileBack').addEventListener('click', ()=>{ show('complete'); });
+
+// --- redeem: the step v1 could not perform (a voucher was a dead string) ---
+$('#btnRedeem').addEventListener('click', async ()=>{
+  const btn=$('#btnRedeem'); const meta=$('#redeemMeta');
+  if(!S||!S.voucher){ return; }
+  btn.disabled=true; btn.textContent='Redeeming…';
+  try{
+    const r=await api('/payouts/'+encodeURIComponent(S.voucher)+'/redeem',{});
+    meta.classList.remove('hidden');
+    meta.textContent='Redeemed '+r.amountStr+' $CMNS at '+new Date(r.redeemedAt).toLocaleTimeString()
+      +(r.txRef?(' · tx '+r.txRef):'');
+    btn.textContent='Redeemed ✓';
+  }catch(e){
+    meta.classList.remove('hidden');
+    meta.style.color='var(--danger)';
+    meta.textContent=e.message;
+    btn.disabled=false; btn.textContent='Redeem voucher';
+  }
+});
+
+// --- shop: the coin sink --------------------------------------------------
+async function openShop(){
+  const errEl=$('#shopErr'); errEl.classList.add('hidden');
+  show('shop');
+  try{
+    const c=await fetch('/shop/'+encodeURIComponent(S.handle)).then(r=>r.json());
+    $('#shopCoins').textContent=c.coins;
+    $('#shopUpgrades').innerHTML=c.upgrades.map(u=>upgradeRow(u)).join('')||'<div class="lb-row" style="opacity:.6">no upgrades</div>';
+    $('#shopCosmetics').innerHTML=c.cosmetics.map(x=>cosmeticRow(x)).join('')||'<div class="lb-row" style="opacity:.6">no cosmetics</div>';
+    // wire the buy buttons
+    document.querySelectorAll('[data-buy-upgrade]').forEach(b=>b.addEventListener('click',()=>buy('buy',b.dataset.buyUpgrade)));
+    document.querySelectorAll('[data-buy-cosmetic]').forEach(b=>b.addEventListener('click',()=>buy('cosmetic',b.dataset.buyCosmetic)));
+  }catch(e){ errEl.textContent=e.message; errEl.classList.remove('hidden'); }
+}
+function upgradeRow(u){
+  const price = u.maxed ? 'MAX' : (u.nextPrice+' coins');
+  const dis = (!u.maxed && !u.affordable) ? 'disabled' : '';
+  const label = u.maxed ? 'Maxed' : ('Buy L'+(u.level+1));
+  return '<div class="lb-row"><span class="nm">'+esc(u.name)
+    +' <span style="color:var(--text-3);font-size:11px">L'+u.level+'/'+u.maxLevel+'</span>'
+    +'<br><span style="color:var(--text-3);font-size:11px">'+esc(u.effect)+'</span></span>'
+    +'<span class="amo">'+price+'</span>'
+    +'<button class="btn btn-ghost" style="padding:7px 12px;font-size:12px" '+dis
+    +' data-buy-upgrade="'+esc(u.key)+'">'+label+'</button></div>';
+}
+function cosmeticRow(x){
+  const owned = x.owned;
+  const dis = (owned||!x.affordable) ? 'disabled' : '';
+  return '<div class="lb-row"><span class="nm">'+esc(x.name)
+    +' <span style="color:var(--text-3);font-size:11px">'+esc(x.blurb)+'</span></span>'
+    +'<span class="amo">'+x.price+' coins</span>'
+    +'<button class="btn btn-ghost" style="padding:7px 12px;font-size:12px" '+dis
+    +' data-buy-cosmetic="'+esc(x.key)+'">'+(owned?'Owned ✓':'Unlock')+'</button></div>';
+}
+async function buy(kind, key){
+  const errEl=$('#shopErr'); errEl.classList.add('hidden');
+  const path = kind==='buy' ? '/shop/'+encodeURIComponent(S.handle)+'/buy'
+                            : '/shop/'+encodeURIComponent(S.handle)+'/cosmetic';
+  try{
+    const r=await api(path,{key});
+    await openShop();  // repriced + re-owned
+    const note=kind==='buy'
+      ? (r.upgrade.name+' → L'+r.upgrade.level+' for '+r.spentCoins+' coins')
+      : (r.cosmetic.name+' unlocked for '+r.spentCoins+' coins');
+    errEl.style.color='var(--sprout)';
+    errEl.textContent=note;
+    errEl.classList.remove('hidden');
+  }catch(e){
+    errEl.style.color='var(--danger)';
+    errEl.textContent=e.message;
+    errEl.classList.remove('hidden');
+  }
+}
+
+// --- profile: the shareable page (nothing linked here before) -------------
+async function openProfile(){
+  show('profile');
+  try{
+    const p=await fetch('/profile/'+encodeURIComponent(S.handle)).then(r=>r.json());
+    $('#profHandle').textContent=p.handle;
+    const b=p.world.badge;
+    $('#profBadge').textContent = b ? (b.name+' · LVL '+p.world.level) : '—';
+    $('#profLevel').textContent=p.world.level;
+    $('#profScene').textContent=p.world.looking||'the commons';
+    $('#profCoins').textContent=p.world.coins;
+    $('#profStreak').textContent=p.streak.current;
+    $('#profWaits').textContent=p.completedWaits;
+    $('#profEarned').innerHTML=esc(p.totalStr)+' <small>$CMNS</small>';
+    $('#profOutstanding').innerHTML=esc(p.outstandingStr)+' <small>$CMNS</small>';
+    $('#profRedeemed').innerHTML=esc(p.claimedStr)+' <small>$CMNS</small>';
+    // last 14 days, as a compact bar strip
+    const days=p.activity.slice().reverse();
+    const max=Math.max(1,...days.map(d=>d.seconds));
+    $('#profActivity').innerHTML = days.length
+      ? days.map(d=>{
+          const blocks=Math.max(1,Math.round((d.seconds/max)*10));
+          return '<div style="font-size:11px">'+esc(String(d.day).slice(5))+' '
+            +'<span style="color:var(--sprout)">'+'▇'.repeat(blocks)+'</span> '
+            +d.seconds+'s</div>';
+        }).join('')
+      : 'no waits recorded yet';
+    $('#profPayouts').innerHTML = p.payouts.length
+      ? p.payouts.map(x=>'<div style="padding:3px 0">'+x.amountStr+' $CMNS · '
+          +(x.redeemed?'<span style="color:var(--sprout)">redeemed</span>':'<span style="color:var(--rum)">issued</span>')
+          +'<br><span style="color:var(--text-3);font-size:10px">'+esc(x.voucher)+'</span></div>').join('')
+      : 'no vouchers yet';
+    $('#profEvents').innerHTML = p.events.length
+      ? p.events.map(e=>'<div class="logline"><span class="t">'+esc(String(e.at).slice(11,19))+'</span>'
+          +'<span style="color:var(--text-2)">'+esc(e.message)+'</span></div>').join('')
+      : '<div class="logline" style="opacity:.6">nothing yet</div>';
+  }catch(e){
+    $('#profEvents').textContent='could not load profile: '+e.message;
+  }
+}
+
 async function renderComplete(r){
   clearInterval(tickTimer); tickTimer=null; clearInterval(watchdog); watchdog=null; if(es)es.close(); es=null;
+  closeHub(); // v2: the multi-agent stream ends with this wait
   $('#sumSecs').textContent=r.session.seconds;
   $('#sumXp').textContent=r.session.xpEarned;
   $('#sumCoins').textContent=r.session.coinsEarned;

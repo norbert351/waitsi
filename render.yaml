@@ -24,3 +24,12 @@ services:
       # waitsi.users / waitsi.worlds / … and sidesteps public entirely.
       - key: WAITSI_DB_SCHEMA
         value: waitsi
+      # Operator routes (/admin/campaigns, /admin/sweep). The VALUE is set in the
+      # dashboard (sync: false). Left unset, those routes are open and say so via
+      # `unguarded: true` — fine for a local demo, not for a public URL.
+      - key: WAITSI_ADMIN_TOKEN
+        sync: false
+      # Close sessions stranded by a restart/sleep after this many seconds.
+      # The boot sweep keeps the wait table from filling with un-settleable rows.
+      - key: WAITSI_STALL_SECONDS
+        value: "300"

@@ -4,16 +4,24 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { bootServer } from './harness.js';
 
 const PORT = 3201;
+// Fresh schema per run so parallel test files never collide on the shared DB.
+const SCHEMA = 'cli_' + Date.now();
 let proc;
 const base = `http://127.0.0.1:${PORT}`;
+
+// The CLI banks waited seconds on a heartbeat; for short jobs the heartbeat may
+// not fire even once before the command exits. A 500ms cadence keeps the tests
+// fast while still exercising the real loop.
+const CLI_ENV = { WAITSI_HEARTBEAT_MS: '500', NODE_OPTIONS: '--dns-result-order=ipv4first' };
 
 function runCli(args) {
   return new Promise((resolve) => {
     const c = spawn(process.execPath, ['bin/waitsi.mjs', ...args], {
       cwd: process.cwd(),
-      env: { ...process.env },
+      env: { ...process.env, ...CLI_ENV },
     });
     let out = '', err = '';
     c.stdout.on('data', (d) => { out += d; });
@@ -23,22 +31,8 @@ function runCli(args) {
 }
 
 before(async () => {
-  process.env.PORT = String(PORT);
-  process.env.WAITSI_DB_SCHEMA = 'cli_' + Date.now();
-  proc = spawn(process.execPath, ['src/index.js'], { cwd: process.cwd(), stdio: 'ignore' });
-  for (let i = 0; i < 40; i++) {
-    try {
-      const r = await fetch(`${base}/health`);
-      if (r.ok) break;
-    } catch { /* not up yet */ }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  await new Promise((resolve) => {
-    const s = spawn(process.execPath, ['src/seed.js'], {
-      cwd: process.cwd(), stdio: 'ignore', env: { ...process.env },
-    });
-    s.on('exit', resolve);
-  });
+  const booted = await bootServer({ port: PORT, schema: SCHEMA });
+  proc = booted.proc;
 });
 
 after(() => {
