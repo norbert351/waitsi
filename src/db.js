@@ -49,8 +49,27 @@ async function all(sql, params = []) {
 }
 
 export async function initSchema() {
-  if (SCHEMA) await pool.query(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
-  await pool.query(`
+  // Run all DDL on ONE client, inside a transaction, under a per-schema
+  // advisory lock. Postgres offers no CREATE TYPE / CREATE TABLE IF NOT EXISTS
+  // that is safe under true concurrency: two processes racing on the SAME
+  // fresh schema (a server boot + a `npm run seed` both call initSchema) can
+  // each see "table absent", both create it, and one dies with
+  //   duplicate key value violates unique constraint "pg_type_typname_nsp_index"
+  // The advisory lock makes those calls SERIALIZE: the second waits for the
+  // first, then sees IF NOT EXISTS fields present and no-ops. Different schemas
+  // hash to different keys, so parallel test files never block each other.
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    if (SCHEMA) {
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [SCHEMA],
+      );
+    }
+    const q = (sql, params) => client.query(sql, params);
+    if (SCHEMA) await q(`CREATE SCHEMA IF NOT EXISTS ${SCHEMA}`);
+    await q(`
     CREATE TABLE IF NOT EXISTS ${S}users (
       id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       handle      TEXT UNIQUE NOT NULL,
@@ -197,21 +216,28 @@ export async function initSchema() {
   `);
   // Idempotent column adds for DBs created by v1 (CREATE TABLE IF NOT EXISTS
   // never adds columns — see the migration note in skills/zerodep-node-backend).
-  await pool.query(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS token TEXT`);
-  await pool.query(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS stream_banked INTEGER NOT NULL DEFAULT 0`);
-  await pool.query(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS attested_tier TEXT`);
-  await pool.query(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS discovery_id INTEGER`);
-  await pool.query(`ALTER TABLE ${S}discoveries ADD COLUMN IF NOT EXISTS budget_total INTEGER NOT NULL DEFAULT 100000`);
-  await pool.query(`ALTER TABLE ${S}discoveries ADD COLUMN IF NOT EXISTS daily_cap_micro INTEGER`);
-  await pool.query(`ALTER TABLE ${S}discoveries ADD COLUMN IF NOT EXISTS starts_at TIMESTAMPTZ`);
-  await pool.query(`ALTER TABLE ${S}discoveries ADD COLUMN IF NOT EXISTS ends_at TIMESTAMPTZ`);
-  await pool.query(`ALTER TABLE ${S}discoveries ADD COLUMN IF NOT EXISTS landing_url TEXT`);
-  await pool.query(`ALTER TABLE ${S}discoveries ADD COLUMN IF NOT EXISTS require_attested BOOLEAN NOT NULL DEFAULT false`);
-  await pool.query(`ALTER TABLE ${S}payouts ADD COLUMN IF NOT EXISTS tx_ref TEXT`);
-  await pool.query(`ALTER TABLE ${S}payouts ADD COLUMN IF NOT EXISTS redeemed_at TIMESTAMPTZ`);
-  await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS ${SCHEMA ? SCHEMA + '_' : ''}payouts_voucher_uniq ON ${S}payouts (voucher)`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS ${SCHEMA ? SCHEMA + '_' : ''}ad_spend_discovery_day ON ${S}ad_spend (discovery_id, created_at)`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS ${SCHEMA ? SCHEMA + '_' : ''}ledger_user_created ON ${S}reward_ledger (user_id, created_at)`);
+  await q(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS token TEXT`);
+  await q(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS stream_banked INTEGER NOT NULL DEFAULT 0`);
+  await q(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS attested_tier TEXT`);
+  await q(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS discovery_id INTEGER`);
+  await q(`ALTER TABLE ${S}discoveries ADD COLUMN IF NOT EXISTS budget_total INTEGER NOT NULL DEFAULT 100000`);
+  await q(`ALTER TABLE ${S}discoveries ADD COLUMN IF NOT EXISTS daily_cap_micro INTEGER`);
+  await q(`ALTER TABLE ${S}discoveries ADD COLUMN IF NOT EXISTS starts_at TIMESTAMPTZ`);
+  await q(`ALTER TABLE ${S}discoveries ADD COLUMN IF NOT EXISTS ends_at TIMESTAMPTZ`);
+  await q(`ALTER TABLE ${S}discoveries ADD COLUMN IF NOT EXISTS landing_url TEXT`);
+  await q(`ALTER TABLE ${S}discoveries ADD COLUMN IF NOT EXISTS require_attested BOOLEAN NOT NULL DEFAULT false`);
+  await q(`ALTER TABLE ${S}payouts ADD COLUMN IF NOT EXISTS tx_ref TEXT`);
+  await q(`ALTER TABLE ${S}payouts ADD COLUMN IF NOT EXISTS redeemed_at TIMESTAMPTZ`);
+  await q(`CREATE UNIQUE INDEX IF NOT EXISTS ${SCHEMA ? SCHEMA + '_' : ''}payouts_voucher_uniq ON ${S}payouts (voucher)`);
+  await q(`CREATE INDEX IF NOT EXISTS ${SCHEMA ? SCHEMA + '_' : ''}ad_spend_discovery_day ON ${S}ad_spend (discovery_id, created_at)`);
+  await q(`CREATE INDEX IF NOT EXISTS ${SCHEMA ? SCHEMA + '_' : ''}ledger_user_created ON ${S}reward_ledger (user_id, created_at)`);
+  await client.query('COMMIT');
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch {}
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 // ---------- users ----------
