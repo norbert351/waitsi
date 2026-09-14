@@ -28,13 +28,17 @@ function cfg(env = process.env) {
   const asset = (env.WAITSI_X402_ASSET || '0x036CbD53842c5426634e7929541eC2318f3dCF7e').toLowerCase();
   const decimals = Number(env.WAITSI_X402_DECIMALS || 6);
   const priceAtomic = BigInt(env.WAITSI_X402_PRICE_ATOMIC || '5000000'); // default 5 USDC
+  // How far back to scan for the settlement Transfer. Base Sepolia is ~2s/block,
+  // so a fixed 100-block window (~3 min) is shorter than the challenge timeout —
+  // a payer who waits near timeout would false-negative payment_not_settled.
+  const scanBlocks = BigInt(env.WAITSI_X402_SCAN_BLOCKS || 2000);
   const payTo = (env.WAITSI_X402_PAYTO
     || (env.X402_EXECUTOR_PK ? privateKeyToAccount(env.X402_EXECUTOR_PK).address : '')).toLowerCase();
   const chain = chainId === 11155111 ? baseSepolia : undefined;
   const chainish = {};
   if (chain) { for (const k of ['id', 'name', 'nativeCurrency']) chainish[k] = chain[k]; chainish.rpcUrls = { default: { http: [rpc] } }; }
   else { chainish.id = chainId; chainish.name = `chain-${chainId}`; chainish.nativeCurrency = { name: 'ETH', symbol: 'ETH', decimals: 18 }; chainish.rpcUrls = { default: { http: [rpc] } }; }
-  return { chainId, rpc, asset, decimals, priceAtomic, payTo, chainish };
+  return { chainId, rpc, asset, decimals, priceAtomic, payTo, scanBlocks, chainish };
 }
 
 function usdcAbi() {
@@ -93,7 +97,7 @@ export function makeGate({ db, env = process.env } = {}) {
 
     // on-chain settlement: a Transfer from payer -> payTo of the exact amount
     const latest = await pc.getBlockNumber();
-    const back = latest - 100n;
+    const back = latest - c.scanBlocks;
     const from = back < 1n ? 1n : back;
     const events = await pc.getLogs({ address: c.asset, event: usdcAbi()[0],
       args: { from: payerAddr, to: getAddress(c.payTo) }, fromBlock: from, toBlock: latest });
@@ -115,6 +119,7 @@ export function makeGate({ db, env = process.env } = {}) {
     res.writeHead(402, {
       'Content-Type': 'application/json; charset=utf-8',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization, PAYMENT-SIGNATURE',
+      'Access-Control-Expose-Headers': 'PAYMENT-REQUIRED',
       'PAYMENT-REQUIRED': buildChallenge({ resource, env }),
       'WWW-Authenticate': 'Payment x402Version="2"',
     });
