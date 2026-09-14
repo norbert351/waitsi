@@ -264,3 +264,37 @@ project).
 - Fit (20%): native to the agent moment (only appears while an agent thinks)
 - Repeatability (15%): progression makes you WANT slow jobs again
 - Execution (10%): a thin, self-demoing prototype
+
+## The Vault is real — on-chain x402 (not simulated)
+The `$CMNS` sponsor economy is funded by **real on-chain USDC payments**, verified
+end to end (Base Sepolia, chain `84532`):
+
+1. `POST /v1/sponsor/fund {discoveryId}` → **HTTP 402** + a signed challenge
+   (`PAYMENT-REQUIRED` header, `accepts[0]` = exact USDC amount → `payTo`).
+2. The sponsor pays USDC on-chain to `payTo`.
+3. Replay the request with a **`PAYMENT-SIGNATURE`** header: WAITSI verifies the
+   EIP-712 signature **and** the on-chain `Transfer` to `payTo`, then seeds the
+   discovery budget from the verified amount (asset-backed, not seeded).
+4. Each success is appended to **`VaultAnchor`** — a hash-chained, tamper-evident
+   on-chain receipt ledger (`ReceiptRecorded(seq, actionHash, prevHash, txHash, …)`).
+
+- `GET /api/vault` — rail + anchor status + every funded top-up (real tx hashes).
+- `GET /vaults` — the judge-facing Vault page.
+- Replay ring: a `payments` row keyed by `tx_hash` — one transfer funds exactly one top-up.
+
+Verified live: real 0.1 USDC settle + on-chain anchor receipt (Base Sepolia). The
+hermetic Anvil suite (`test/x402.test.js`) proves the full loop with no external funds.
+
+### Env (see `render.yaml`)
+`WAITSI_X402_RPC|CHAIN_ID|ASSET|PAYTO|PRICE_ATOMIC|DECIMALS|SCAN_BLOCKS`,
+`WAITSI_ANCHOR_RPC|CHAIN_ID|ADDRESS|PK`. Without `WAITSI_X402_PAYTO` the gate answers an
+honest `503 x402_not_configured`; without `WAITSI_ANCHOR_PK` the anchor reports
+`mode:"logging"` (local receipts) rather than pretending to be on-chain.
+
+## Accounts & saved history (native auth)
+Self-contained login (no external provider): `POST /account/register|login|logout`,
+`GET /account/me`. Passwords are scrypt-hashed with a per-user salt; sessions are
+opaque tokens in an HttpOnly `SameSite=Lax` cookie. **Save results/history per user**
+via `POST|GET /api/saved` (auth-gated, per-user isolated). The public commons stays
+open; an account only adds private history. UI at `/account`; the surface shows a
+floating `Vault · Log in` launcher.

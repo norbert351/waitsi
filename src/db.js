@@ -480,6 +480,14 @@ export async function listSavedViews(userId) {
   );
 }
 
+export async function listPayments(limit = 50) {
+  return all(
+    `SELECT tx_hash, asset, amount_micro, chain_id, payer, pay_to, discovery_id, created_at
+       FROM ${S}payments ORDER BY created_at DESC LIMIT $1`,
+    [limit],
+  );
+}
+
 // ---------- discoveries / campaigns ----------
 // Eligible = active, in window, under lifetime budget, under today's pacing
 // cap. The caps are enforced HERE (at selection) and ATOMICALLY at charge

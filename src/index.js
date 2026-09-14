@@ -465,6 +465,27 @@ const server = createServer(async (req, res) => {
       if (!me) return json(res, 401, { error: 'sign in to view' });
       return json(res, 200, { savedViews: await db.listSavedViews(me.id) });
     }
+    // The Vault — the judge-facing "the $CMNS is REAL" surface: every funded
+    // top-up (real on-chain x402 payments) + rail + on-chain anchor status.
+    if (method === 'GET' && path === '/api/vault') {
+      const gate = makeGate({ db });
+      const vault = makeVaultWriter();
+      const rail = {
+        live: gate.configured, chainId: gate.cfg.chainId, asset: gate.cfg.asset,
+        payTo: gate.cfg.payTo, priceMicro: gate.cfg.priceAtomic.toString(),
+      };
+      let receiptCount = null, anchorReachable = false;
+      if (vault.address) {
+        try {
+          const c = await vault.pc.readContract({ address: vault.address, abi: vault.abi, functionName: 'receiptCount' });
+          receiptCount = Number(c); anchorReachable = true;
+        } catch { /* RPC unreachable */ }
+      }
+      const anchor = { configured: vault.ready, address: vault.address, chainId: vault.chainId, onChainReceipts: receiptCount, reachable: anchorReachable };
+      const payments = await db.listPayments(50);
+      const vaultStats = await svc.getVaultStats();
+      return json(res, 200, { rail, anchor, payments, vaultStats });
+    }
 
     // ---- sponsor-ops (admin) ----
     if (method === 'GET' && path === '/admin/campaigns') {
@@ -511,6 +532,22 @@ const server = createServer(async (req, res) => {
     // Static surface — the wait-surface UI itself (GET / -> wait-surface)
     if (method === 'GET' && path === '/account' && serveStatic(res, '/account.html')) {
       return;
+    }
+    if (method === 'GET' && path === '/vaults' && serveStatic(res, '/vault.html')) {
+      return;
+    }
+    if (method === 'GET' && (path === '/' || path === '/index.html')) {
+      // Inject a small floating launcher (Vault · Log in) without editing the
+      // minified wait-surface SPA — non-invasive string insertion.
+      const html = readFileSync(resolve(PUBLIC_DIR, 'index.html'), 'utf8');
+      if (!html.includes('/launcher.js')) {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        const injected = html.replace('</body>', '<script src="/launcher.js?v=1"></script></body>');
+        res.end(injected);
+        return;
+      }
+      return serveStatic(res, path);
     }
     if (method === 'GET' && serveStatic(res, path)) {
       return;

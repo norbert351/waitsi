@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>WAITSI — The Vault ($CMNS)</title>
+<style>
+  :root{--ink:#0B0E0C;--ink2:#111612;--line:#212B23;--sprout:#B8FF4F;--verdant:#2DD4BF;--rum:#FFC248;--danger:#FF6B6B;--text:#E9F3E3;--text2:#9CA98F;--text3:#5C6A55}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ink);color:var(--text);font-family:system-ui,sans-serif}
+  .wrap{max-width:820px;margin:0 auto;padding:28px 20px 80px}
+  a.back{color:var(--verdant);text-decoration:none;font-size:14px}
+  h1{font-size:28px;margin:14px 0 4px}
+  .tag{display:inline-block;background:var(--sprout);color:#08130a;border-radius:999px;padding:3px 10px;font-size:12px;font-weight:700}
+  .tag.off{background:var(--line);color:var(--text2)}
+  .tag.live{background:#0b100c;border:1px solid var(--sprout);color:var(--sprout)}
+  p.sub{color:var(--text2);font-size:14px;line-height:1.6;margin:8px 0 22px}
+  .card{background:var(--ink2);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+  h2{font-size:15px;margin:0 0 12px;text-transform:uppercase;letter-spacing:.06em;color:var(--wart)}
+  h2{color:var(--text2)}
+  .kv{display:grid;grid-template-columns:150px 1fr;gap:8px 16px;font-size:14px}
+  .kv b{color:var(--text2);font-weight:500}
+  .kv code{color:var(--sprout);font-family:ui-monospace,monospace;font-size:12px;word-break:break-all}
+  ul.payments{list-style:none;padding:0;margin:0}
+  ul.payments li{border-top:1px solid var(--line);padding:12px 0;font-size:14px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  ul.payments li:first-child{border-top:0}
+  .muted{color:var(--text3);font-size:12px}
+  .amt{color:var(--rum);font-weight:700;font-family:ui-monospace,monospace}
+  a{color:var(--verdant)}
+  .steps{font-size:14px;line-height:1.7}
+  .steps ol{padding-left:20px;margin:0}
+  .steps li{margin-bottom:6px}
+  .ok{color:var(--sprout)}.warn{color:var(--rum)}.bad{color:var(--danger)}
+  .explorer{font-family:ui-monospace,monospace;font-size:12px;color:var(--text2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/">← back to the commons</a>
+  <h1>Vault <span class="tag live">$CMNS · asset-backed</span></h1>
+  <p class="sub">Every sponsor top-up here is a <b>real on-chain USDC payment</b>, verified by WAITSI and anchored as a tamper-evident on-chain receipt. This is not a Postgres number — it is money that moved.</p>
+
+  <div class="card">
+    <h2>Settlement rail</h2>
+    <div class="kv" id="rail">…</div>
+  </div>
+
+  <div class="card">
+    <h2>On-chain anchor</h2>
+    <div class="kv" id="anchor">…</div>
+  </div>
+
+  <div class="card">
+    <h2>Funded top-ups (real payments)</h2>
+    <ul class="payments" id="payments"><li class="muted">Loading…</li></ul>
+  </div>
+
+  <div class="card">
+    <h2>Oracle budget</h2>
+    <div class="kv" id="budget">…</div>
+  </div>
+
+  <div class="card steps">
+    <h2>How it's real</h2>
+    <ol>
+      <li>WAITSI returns <b>HTTP 402</b> + a signed challenge for a sponsor top-up.</li>
+      <li>A sponsor (or wallet) pays <b>USDC on Base Sepolia</b> to the rail address.</li>
+      <li>WAITSI verifies the EIP-712 signature <i>and</i> the on-chain <code>Transfer</code> to payTo.</li>
+      <li>It seeds the discovery budget from that verified asset-backed amount.</li>
+      <li>Each settlement is appended to a <b>hash-chained on-chain receipt</b> (the <code>VaultAnchor</code>).</li>
+    </ol>
+  </div>
+
+  <p class="muted">Sign in <a href="/account">/account</a> to save your results &amp; history.</p>
+</div>
+<script>
+const $=(i)=>document.getElementById(i);
+const esc=(s)=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const EXPL='https://base-sepolia.blockscout.com';
+async function load(){
+  const r=await fetch('/api/vault'); const d=await r.json();
+  renderRail(d.rail); renderAnchor(d.anchor); renderPayments(d.payments); renderBudget(d.vaultStats||{});
+}
+function renderRail(r){
+  let lab=r.live?'<span class="tag live">LIVE · returns 402</span>':'<span class="tag off">not configured (503)</span>';
+  $('rail').innerHTML=`<b>Status</b><div>${lab} ${esc(r.chainId?'chain '+r.chainId:'')}</div>`+
+    `<b>Asset</b><code>${esc(r.asset||'—')}</code>`+
+    `<b>Receive to</b><code>${esc(r.payTo||'—')}</code>`+
+    `<b>Per top-up</b><code>${micro(r.priceMicro)} USDC</code>`;
+}
+function micro(m){ const v=Number(m||0)/1e6; return v.toFixed(2); }
+function renderAnchor(a){
+  const reach=a.reachable?`<span class="ok">${a.onChainReceipts} receipt(s)</span>`:`<span class="warn">RPC unreachable</span>`;
+  $('anchor').innerHTML=`<b>Status</b><div>${a.configured?'<span class="tag live">ON-CHAIN</span>':'<span class="tag off">logging (set WAITSI_ANCHOR_PK)</span>'}</div>`+
+    `<b>Receipts</b><div>${reach}</div>`+
+    `<b>Contract</b><code>${esc(a.address||'—')}</code>${a.address?' <a class="explorer" target="_blank" rel="noopener" href="'+EXPL+'/address/'+esc(a.address)+'">view ↗</a>':''}`+
+    `<b>Chain</b><code>${esc(String(a.chainId||''))}</code>`;
+}
+function renderPayments(ps){
+  if(!ps||!ps.length){ $('payments').innerHTML='<li class="muted">Nothing funded yet — be the first real top-up.</li>'; return; }
+  $('payments').innerHTML=ps.map(p=>{
+    const link=`<a class="explorer" target="_blank" rel="noopener" href="${EXPL}/tx/${esc(p.tx_hash)}">${esc(p.tx_hash.slice(0,12))}…↗</a>`;
+    return `<li><div><b class="amt">$${micro(p.amount_micro)}</b> <span class="muted">· discovery #${esc(p.discovery_id)}</span></div><div class="muted">${esc(p.pay_to.slice(0,8))}… <span>${new Date(p.created_at).toLocaleString()}</span> ${link}</div></li>`;
+  }).join('');
+}
+function renderBudget(v){
+  $('budget').innerHTML=`<b>Builders</b><div>${esc(v.builders??'—')}</div>`+
+    `<b>Issued</b><div class="amt">$${Number((v.issuedMicro??0)/1e6).toFixed(2)}</div>`+
+    `<b>Outstanding</b><div class="amt">$${Number((v.outstandingMicro??0)/1e6).toFixed(2)}</div>`;
+}
+load();
+</script>
+</body>
+</html>
