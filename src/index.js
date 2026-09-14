@@ -27,6 +27,7 @@ import { Transform } from 'node:stream';
 import * as db from './db.js';
 import * as svc from './service.js';
 import { makeGate } from './x402.js';
+import { makeVaultWriter } from './onchain.js';
 import { CATEGORIES } from './engine.js';
 
 const PORT = process.env.PORT || 3120;
@@ -388,6 +389,10 @@ const server = createServer(async (req, res) => {
         if (!disco) return json(res, 404, { error: 'unknown discovery' });
         const amt = gate.cfg.priceAtomic;
         const funded = await db.fundDiscoveryBudget(discoveryId, Number(amt));
+        // Anchor the REAL settlement as an on-chain, tamper-evident receipt.
+        const anchored = await makeVaultWriter().anchor({
+          txHash, amountMicro: Number(amt), discoveryId,
+        });
         return json(res, 200, {
           funded: true,
           discoveryId,
@@ -397,6 +402,7 @@ const server = createServer(async (req, res) => {
           budgetTotal: funded.budget_total,
           txHash,
           payer,
+          anchor: anchored,
         });
       } catch (e) {
         const code = e.code || (e.status ? String(e.status) : '');

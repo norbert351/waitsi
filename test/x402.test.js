@@ -29,7 +29,7 @@ const tokenAbi = [
   { type: 'event', name: 'Transfer', inputs: [{ type: 'address', name: 'from', indexed: true }, { type: 'address', name: 'to', indexed: true }, { type: 'uint256', name: 'value', indexed: false }] },
 ];
 
-let anvilProc, token, buyer, payTo, base, proc, discoveryId, priorRemaining;
+let anvilProc, token, anchorAddr, buyer, payTo, base, proc, discoveryId, priorRemaining;
 
 function req(method, path, body, headers = {}) {
   return fetch(`${base}${path}`, { method, headers: { 'Content-Type': 'application/json', ...headers }, body: body ? JSON.stringify(body) : undefined })
@@ -53,6 +53,13 @@ before(async () => {
   if (!m) throw new Error('no Deployed-to line:\n' + stdout);
   token = m[1].toLowerCase();
 
+  // Deploy the on-chain VaultAnchor receipt ledger.
+  const aout = await exec(FORGE, ['create', 'test/contracts/VaultAnchor.sol:VaultAnchor', '--rpc-url', RPC, '--private-key', BUYER_KEY, '--broadcast'], { cwd: process.cwd() })
+    .catch((e) => { throw new Error('vault create failed:\n' + (e.stdout || '') + (e.stderr || '')); });
+  const am = aout.stdout.match(/Deployed to: (0x[a-fA-F0-9]{40})/);
+  if (!am) throw new Error('no VaultAnchor Deployed-to line:\n' + aout.stdout);
+  anchorAddr = am[1].toLowerCase();
+
   buyer = privateKeyToAccount(BUYER_KEY);
   payTo = privateKeyToAccount(PAYTO_KEY).address.toLowerCase();
   const pc = createPublicClient({ chain, transport: http(RPC, { timeout: 15000 }) });
@@ -65,9 +72,9 @@ before(async () => {
   } };
   const mint = await wc.writeContract({ address: token, abi: tokenAbi, functionName: 'mint', args: [buyer.address, PRICE * 3n] });
   await pc.waitForTransactionReceipt({ hash: mint });
-  console.log('deployed token', token, 'payTo', payTo);
+  console.log('deployed token', token, 'vaultAnchor', anchorAddr, 'payTo', payTo);
 
-  // Boot the WAITSI server with the gate pointed at Anvil.
+  // Boot the WAITSI server with the gate + vault anchor pointed at Anvil.
   const booted = await bootServer({
     port: SERVER_PORT,
     schema: 'x402_' + Date.now(),
@@ -78,6 +85,10 @@ before(async () => {
       WAITSI_X402_PAYTO: payTo,
       WAITSI_X402_PRICE_ATOMIC: PRICE.toString(),
       WAITSI_X402_DECIMALS: '6',
+      WAITSI_ANCHOR_RPC: RPC,
+      WAITSI_ANCHOR_CHAIN_ID: String(CHAIN_ID),
+      WAITSI_ANCHOR_ADDRESS: anchorAddr,
+      WAITSI_ANCHOR_PK: BUYER_KEY,
     },
   });
   proc = booted.proc;
@@ -145,6 +156,19 @@ test('sponsor fund: 402 -> pay on-chain -> sign -> replay funds the real budget;
   const replay2 = await req('POST', '/v1/sponsor/fund', { discoveryId }, { 'PAYMENT-SIGNATURE': header });
   assert.equal(replay2.status, 402);
   assert.equal(replay2.body.code, 'payment_already_used');
+
+  // 5b. The REAL settlement was anchored as a tamper-evident on-chain receipt.
+  assert.equal(replay.body.anchor.live, true, 'anchor writer live');
+  assert.equal(replay.body.anchor.mode, 'onchain');
+  assert.ok(replay.body.anchor.anchorTx, 'anchor receipt tx present');
+  const receiptAbiF = [
+    { type: 'function', name: 'receiptCount', inputs: [], outputs: [{ type: 'uint256' }], stateMutability: 'view' },
+    { type: 'function', name: 'receiptSeq', inputs: [{ type: 'uint256' }], outputs: [{ type: 'bytes32' }], stateMutability: 'view' },
+  ];
+  const count = await pc.readContract({ address: anchorAddr, abi: receiptAbiF, functionName: 'receiptCount' });
+  assert.equal(Number(count), 1, 'the funding receipt is anchored on-chain');
+  const seq0 = await pc.readContract({ address: anchorAddr, abi: receiptAbiF, functionName: 'receiptSeq', args: [0n] });
+  assert.notEqual(seq0, '0x0000000000000000000000000000000000000000000000000000000000000000', 'chain head set');
 });
 
 test('a signed-but-never-paid header is rejected (payment_not_settled)', async () => {
