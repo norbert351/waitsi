@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>WAITSI — Account</title>
+<style>
+  :root{--ink:#0B0E0C;--ink2:#111612;--line:#212B23;--sprout:#B8FF4F;--verdant:#2DD4BF;--rum:#FFC248;--text:#E9F3E3;--text2:#9CA98F;--text3:#5C6A55;--danger:#FF6B6B}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ink);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100vh}
+  .wrap{max-width:640px;margin:0 auto;padding:28px 20px 60px}
+  a.back{color:var(--verdant);text-decoration:none;font-size:14px}
+  h1{font-size:26px;margin:16px 0 4px}
+  p.sub{color:var(--text2);margin:0 0 22px;font-size:14px;line-height:1.5}
+  .card{background:var(--ink2);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+  label{display:block;font-size:12px;color:var(--text2);text-transform:uppercase;letter-spacing:.08em;margin:0 0 6px}
+  input{width:100%;background:#0b100c;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:12px;font-size:15px;margin-bottom:12px}
+  input:focus{outline:none;border-color:var(--sprout)}
+  button{background:var(--sprout);color:#08130a;border:0;border-radius:10px;padding:12px 16px;font-weight:700;font-size:15px;cursor:pointer;width:100%}
+  button.ghost{background:transparent;color:var(--text2);border:1px solid var(--line);font-weight:600}
+  button:disabled{opacity:.5;cursor:default}
+  .row{display:flex;gap:10px}
+  .row button{width:auto;flex:1}
+  .msg{font-size:14px;margin-top:10px;min-height:18px}
+  .err{color:var(--danger)}.ok{color:var(--sprout)}
+  .pill{display:inline-block;background:#0b100c;border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px;color:var(--text2);margin-right:6px}
+  ul.saved{list-style:none;padding:0;margin:8px 0 0}
+  ul.saved li{border-top:1px solid var(--line);padding:12px 0;font-size:14px}
+  ul.saved li:first-child{border-top:0}
+  .muted{color:var(--text3);font-size:12px;font-family:ui-monospace,monospace}
+  .hidden{display:none}
+  h2{font-size:16px;margin:0 0 10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/">← back to the commons</a>
+  <h1>Your WAITSI account</h1>
+  <p class="sub">Sign in to save your wait history and views. The live commons stays open to everyone — an account only adds your private history.</p>
+
+  <!-- signed out -->
+  <div id="signedout">
+    <div class="card">
+      <h2 id="formtitle">Create an account</h2>
+      <label for="handle">Handle</label>
+      <input id="handle" placeholder="your-builder-handle" autocomplete="username" />
+      <label for="password">Password</label>
+      <input id="password" type="password" placeholder="at least 8 characters" autocomplete="current-password" />
+      <div class="row">
+        <button id="register">Register</button>
+        <button id="login" class="ghost">Log in</button>
+      </div>
+      <div class="msg" id="msg"></div>
+    </div>
+  </div>
+
+  <!-- signed in -->
+  <div id="signedin" class="hidden">
+    <div class="card">
+      <div><span class="pill" id="handlepill">—</span><span class="muted" id="uid"></span></div>
+      <div class="row" style="margin-top:14px">
+        <button id="logout" class="ghost">Log out</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Save your results / history</h2>
+      <label for="savelabel">Label</label>
+      <input id="savelabel" placeholder="e.g. overnight agent run" />
+      <button id="save">Save current view</button>
+      <div class="msg" id="savemsg"></div>
+    </div>
+    <div class="card">
+      <h2>Your saved views</h2>
+      <ul class="saved" id="savedlist"><li class="muted">Nothing saved yet.</li></ul>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const api = (m, p, b) => fetch(p, { method: m, headers: { 'Content-Type': 'application/json' }, body: b ? JSON.stringify(b) : undefined }).then(async r => ({ status: r.status, body: await r.json().catch(() => null) }));
+
+function signedOut(msg, kind) {
+  $('signedout').classList.remove('hidden');
+  $('signedin').classList.add('hidden');
+  $('msg').textContent = msg || '';
+  $('msg').className = 'msg ' + (kind || '');
+}
+function signedIn(user, views) {
+  $('signedout').classList.add('hidden');
+  $('signedin').classList.remove('hidden');
+  $('handlepill').textContent = '@' + user.handle;
+  $('uid').textContent = '#' + user.id;
+  renderViews(views || []);
+}
+function renderViews(views) {
+  const ul = $('savedlist');
+  if (!views.length) { ul.innerHTML = '<li class="muted">Nothing saved yet.</li>'; return; }
+  ul.innerHTML = views.map(v => '<li><b>' + esc(v.label) + '</b><div class="muted">' + esc(String(v.summary)).slice(0, 160) + ' · ' + new Date(v.created_at).toLocaleString() + '</div></li>').join('');
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+async function refresh() {
+  const me = await api('GET', '/account/me');
+  if (me.status === 200) signedIn(me.body.user, me.body.savedViews);
+  else signedOut('', '');
+}
+
+$('register').onclick = async () => {
+  $('msg').textContent = 'creating…'; $('msg').className = 'msg';
+  const r = await api('POST', '/account/register', { handle: $('handle').value, password: $('password').value });
+  if (r.status === 201) { await refresh(); }
+  else { $('msg').textContent = r.body?.error || 'could not register'; $('msg').className = 'msg err'; }
+};
+$('login').onclick = async () => {
+  $('msg').textContent = 'signing in…'; $('msg').className = 'msg';
+  const r = await api('POST', '/account/login', { handle: $('handle').value, password: $('password').value });
+  if (r.status === 200) { await refresh(); }
+  else { $('msg').textContent = r.body?.error || 'invalid credentials'; $('msg').className = 'msg err'; }
+};
+$('logout').onclick = async () => { await api('POST', '/account/logout', {}); await refresh(); };
+$('save').onclick = async () => {
+  const label = $('savelabel').value || 'view ' + new Date().toLocaleTimeString();
+  const r = await api('POST', '/api/saved', { label, summary: { at: new Date().toISOString(), source: 'account-page' } });
+  if (r.status === 201) { $('savemsg').textContent = 'saved ✓'; $('savemsg').className = 'msg ok'; $('savelabel').value = ''; refresh(); }
+  else { $('savemsg').textContent = r.body?.error || 'could not save'; $('savemsg').className = 'msg err'; }
+};
+
+refresh();
+</script>
+</body>
+</html>

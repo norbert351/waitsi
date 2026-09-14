@@ -229,9 +229,31 @@ export async function initSchema() {
       discovery_id  INTEGER,
       created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- WAITSI-native accounts: an opaque login session token in an HttpOnly
+    -- cookie. Cleaned by expiry; deleting the row logs the session out.
+    CREATE TABLE IF NOT EXISTS ${S}sessions (
+      id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES ${S}users(id),
+      token      TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      expires_at TIMESTAMPTZ NOT NULL
+    );
+
+    -- "Save results/history per user": a signed-in builder's saved views.
+    -- Public only per-user; never visible without a valid session.
+    CREATE TABLE IF NOT EXISTS ${S}saved_views (
+      id         INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES ${S}users(id),
+      label      TEXT NOT NULL,
+      summary    TEXT NOT NULL DEFAULT '{}',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
   `);
   // Idempotent column adds for DBs created by v1 (CREATE TABLE IF NOT EXISTS
   // never adds columns — see the migration note in skills/zerodep-node-backend).
+  await q(`ALTER TABLE ${S}users ADD COLUMN IF NOT EXISTS password_hash TEXT`);
+  await q(`ALTER TABLE ${S}users ADD COLUMN IF NOT EXISTS password_salt TEXT`);
   await q(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS token TEXT`);
   await q(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS stream_banked INTEGER NOT NULL DEFAULT 0`);
   await q(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS attested_tier TEXT`);
@@ -395,6 +417,67 @@ export async function markPaymentConsumed({ txHash, asset, amountMicro, chainId,
 export async function paymentConsumed(txHash) {
   const r = await all(`SELECT 1 AS x FROM ${S}payments WHERE tx_hash = $1`, [txHash]);
   return r.length > 0;
+}
+
+// ---------- accounts / auth (WAITSI-native) ----------
+export async function findUserByHandle(handle) {
+  return one(`SELECT id, handle, password_hash, password_salt FROM ${S}users WHERE handle = $1`, [handle]);
+}
+
+export async function createUserWithPassword(handle, hash, salt) {
+  // Create the user + their world in one call; if the handle exists, fail.
+  const u = await one(
+    `INSERT INTO ${S}users (handle, password_hash, password_salt) VALUES ($1, $2, $3)
+     ON CONFLICT (handle) DO NOTHING RETURNING id, handle`,
+    [handle, hash, salt],
+  );
+  if (!u) return null; // handle taken
+  await one(`INSERT INTO ${S}worlds (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING`, [u.id]);
+  return u;
+}
+
+export async function setUserPassword(userId, hash, salt) {
+  return one(`UPDATE ${S}users SET password_hash = $2, password_salt = $3 WHERE id = $1 RETURNING id, handle`, [userId, hash, salt]);
+}
+
+export async function createSession(userId, token, expiresAt) {
+  return one(
+    `INSERT INTO ${S}sessions (user_id, token, expires_at) VALUES ($1, $2, $3) RETURNING id, token, expires_at`,
+    [userId, token, expiresAt],
+  );
+}
+
+export async function getSessionUser(token) {
+  if (!token) return null;
+  return one(
+    `SELECT u.id, u.handle, s.expires_at
+       FROM ${S}sessions s JOIN ${S}users u ON u.id = s.user_id
+      WHERE s.token = $1 AND s.expires_at > now()`,
+    [token],
+  );
+}
+
+export async function deleteSession(token) {
+  await pool.query(`DELETE FROM ${S}sessions WHERE token = $1`, [token]);
+  return true;
+}
+
+export async function purgeExpiredSessions() {
+  await pool.query(`DELETE FROM ${S}sessions WHERE expires_at < now()`);
+}
+
+export async function createSavedView(userId, label, summary) {
+  return one(
+    `INSERT INTO ${S}saved_views (user_id, label, summary) VALUES ($1, $2, $3) RETURNING id, label, summary, created_at`,
+    [userId, label, summary],
+  );
+}
+
+export async function listSavedViews(userId) {
+  return all(
+    `SELECT id, label, summary, created_at FROM ${S}saved_views WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100`,
+    [userId],
+  );
 }
 
 // ---------- discoveries / campaigns ----------

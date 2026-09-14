@@ -28,6 +28,7 @@ import * as db from './db.js';
 import * as svc from './service.js';
 import { makeGate } from './x402.js';
 import { makeVaultWriter } from './onchain.js';
+import * as auth from './auth.js';
 import { CATEGORIES } from './engine.js';
 
 const PORT = process.env.PORT || 3120;
@@ -71,6 +72,18 @@ function json(res, code, body) {
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
+  });
+  res.end(payload);
+}
+
+// Same as json() but attaches a Set-Cookie (login/register/logout).
+function jsonSetCookie(res, code, body, cookie) {
+  cors(res);
+  const payload = JSON.stringify(body, null, 2);
+  res.writeHead(code, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Set-Cookie': cookie,
   });
   res.end(payload);
 }
@@ -413,6 +426,45 @@ const server = createServer(async (req, res) => {
       }
     }
 
+    // ---- accounts (WAITSI-native auth: scrypt + HttpOnly session cookie) ----
+    if (method === 'POST' && path === '/account/register') {
+      const body = await readBody(req);
+      const r = await auth.register(body.handle, body.password);
+      if (!r.ok) return json(res, r.status || 400, { error: r.error });
+      return jsonSetCookie(res, 201, { user: r.user }, auth.sessionCookie(r.token));
+    }
+    if (method === 'POST' && path === '/account/login') {
+      const body = await readBody(req);
+      const r = await auth.login(body.handle, body.password);
+      if (!r.ok) return json(res, r.status || 401, { error: r.error });
+      return jsonSetCookie(res, 200, { user: r.user }, auth.sessionCookie(r.token));
+    }
+    if (method === 'POST' && path === '/account/logout') {
+      await auth.logout(req);
+      return jsonSetCookie(res, 200, { ok: true }, auth.clearSessionCookie());
+    }
+    if (method === 'GET' && path === '/account/me') {
+      const me = await auth.fromRequest(req);
+      if (!me) return json(res, 401, { error: 'not signed in' });
+      return json(res, 200, { user: { id: me.id, handle: me.handle }, savedViews: await db.listSavedViews(me.id) });
+    }
+    // Save results/history per user — the whole point of sign-in. Public to
+    // read the dashboard; saving requires a session.
+    if (method === 'POST' && path === '/api/saved') {
+      const me = await auth.fromRequest(req);
+      if (!me) return json(res, 401, { error: 'sign in to save' });
+      const body = await readBody(req);
+      const label = String(body.label || '').trim().slice(0, 80);
+      if (!label) return json(res, 400, { error: 'label required' });
+      const summary = typeof body.summary === 'string' ? body.summary.slice(0, 4000) : JSON.stringify(body.summary || {});
+      return json(res, 201, { saved: await db.createSavedView(me.id, label, summary) });
+    }
+    if (method === 'GET' && path === '/api/saved') {
+      const me = await auth.fromRequest(req);
+      if (!me) return json(res, 401, { error: 'sign in to view' });
+      return json(res, 200, { savedViews: await db.listSavedViews(me.id) });
+    }
+
     // ---- sponsor-ops (admin) ----
     if (method === 'GET' && path === '/admin/campaigns') {
       const gate = adminAllowed(req);
@@ -456,6 +508,9 @@ const server = createServer(async (req, res) => {
     }
 
     // Static surface — the wait-surface UI itself (GET / -> wait-surface)
+    if (method === 'GET' && path === '/account' && serveStatic(res, '/account.html')) {
+      return;
+    }
     if (method === 'GET' && serveStatic(res, path)) {
       return;
     }
