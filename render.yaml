@@ -33,3 +33,29 @@ services:
       # The boot sweep keeps the wait table from filling with un-settleable rows.
       - key: WAITSI_STALL_SECONDS
         value: "300"
+      # ---- Real x402 settlement rail (Base Sepolia USDC, chain 84532) ----
+      # POST /v1/sponsor/fund returns 402; a sponsor pays USDC on-chain and the
+      # verified transfer funds the discovery budget (asset-backed, not seeded).
+      - key: WAITSI_X402_RPC
+        value: https://base-sepolia.publicnode.com
+      - key: WAITSI_X402_CHAIN_ID
+        value: "84532"
+      - key: WAITSI_X402_ASSET
+        value: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+      - key: WAITSI_X402_PAYTO
+        value: "0x3360DA7D976D7ED5Fe79Ee8022f539fb9af8f7C2"
+      - key: WAITSI_X402_PRICE_ATOMIC
+        value: "100000"          # 0.1 USDC per top-up
+      - key: WAITSI_X402_DECIMALS
+        value: "6"
+      # ---- On-chain VaultAnchor (base Sepolia) — tamper-evident receipts ----
+      - key: WAITSI_ANCHOR_ADDRESS
+        value: "0xECC0962C3Bf3C3c3e8C92d9d5f5F960B759bB7BD"
+      - key: WAITSI_ANCHOR_RPC
+        value: https://base-sepolia.publicnode.com
+      - key: WAITSI_ANCHOR_CHAIN_ID
+        value: "84532"
+      # Signer for the anchor receipts. The VALUE is the funded key (same as
+      # X402_EXECUTOR_PK) — set it in the dashboard, never in the repo.
+      - key: WAITSI_ANCHOR_PK
+        sync: false
