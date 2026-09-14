@@ -213,6 +213,22 @@ export async function initSchema() {
       meta       TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- Real on-chain x402 settlement replay ring. One row per consumed payment
+    -- tx — a sponsor paying USDC to top-up a discovery's budget. tx_hash is
+    -- the PK so a replay is detected by INSERT ON CONFLICT DO NOTHING; one
+    -- on-chain transfer funds exactly one budget top-up.
+    CREATE TABLE IF NOT EXISTS ${S}payments (
+      tx_hash       TEXT PRIMARY KEY,
+      asset         TEXT NOT NULL,
+      amount_micro  INTEGER NOT NULL,
+      chain_id      INTEGER NOT NULL,
+      payer         TEXT NOT NULL,
+      pay_to        TEXT NOT NULL,
+      purpose       TEXT NOT NULL DEFAULT 'sponsor_fund',
+      discovery_id  INTEGER,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
   `);
   // Idempotent column adds for DBs created by v1 (CREATE TABLE IF NOT EXISTS
   // never adds columns — see the migration note in skills/zerodep-node-backend).
@@ -362,6 +378,25 @@ export async function getSessionByToken(token) {
   return one(`SELECT * FROM ${S}wait_sessions WHERE token = $1`, [token]);
 }
 
+// ---------- on-chain x402 payment replay ring ----------
+// One payment tx = one budget top-up. INSERT ON CONFLICT DO NOTHING returns
+// (changes === 0) for a replayed tx, so the caller can reject it as
+// payment_already_used. Return value is a DURABLE "is this tx newly banked?".
+export async function markPaymentConsumed({ txHash, asset, amountMicro, chainId, payer, payTo, discoveryId = null }) {
+  const r = await pool.query(
+    `INSERT INTO ${S}payments (tx_hash, asset, amount_micro, chain_id, payer, pay_to, discovery_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     ON CONFLICT (tx_hash) DO NOTHING`,
+    [txHash, asset, amountMicro, chainId, payer, payTo, discoveryId],
+  );
+  return r.rowCount === 1; // true => freshly consumed; false => already used
+}
+
+export async function paymentConsumed(txHash) {
+  const r = await all(`SELECT 1 AS x FROM ${S}payments WHERE tx_hash = $1`, [txHash]);
+  return r.length > 0;
+}
+
 // ---------- discoveries / campaigns ----------
 // Eligible = active, in window, under lifetime budget, under today's pacing
 // cap. The caps are enforced HERE (at selection) and ATOMICALLY at charge
@@ -441,6 +476,19 @@ export async function upsertCampaign(c) {
 export async function chargeDiscoveryBudget(id, micro) {
   return one(
     `UPDATE ${S}discoveries SET budget_remaining = GREATEST(budget_remaining - $1, 0) WHERE id = $2 RETURNING *`,
+    [micro, id],
+  );
+}
+
+// Real x402-funded budget top-up: a verified on-chain USDC payment lands as
+// spendable budget. budget_total also grows so the "VAULT" reporting reflects
+// genuinely asset-backed funding, not just an admin-seeded number.
+export async function fundDiscoveryBudget(id, micro) {
+  return one(
+    `UPDATE ${S}discoveries
+       SET budget_remaining = budget_remaining + $1,
+           budget_total = budget_total + $1
+     WHERE id = $2 RETURNING *`,
     [micro, id],
   );
 }

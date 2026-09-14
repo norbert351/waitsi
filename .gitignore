@@ -4,3 +4,6 @@ data/
 *.log
 .env
 .DS_Store
+# foundry/anvil build artifacts (UnitToken e2e)
+cache/
+out/

@@ -26,6 +26,7 @@ import { resolve, extname, normalize } from 'node:path';
 import { Transform } from 'node:stream';
 import * as db from './db.js';
 import * as svc from './service.js';
+import { makeGate } from './x402.js';
 import { CATEGORIES } from './engine.js';
 
 const PORT = process.env.PORT || 3120;
@@ -359,6 +360,51 @@ const server = createServer(async (req, res) => {
     // GET /vault — global vault/sponsor stats (the judge-facing numbers)
     if (method === 'GET' && path === '/vault') {
       return json(res, 200, await svc.getVaultStats());
+    }
+
+    // POST /v1/sponsor/fund — REAL x402 on-chain top-up of a discovery budget.
+    // No PAYMENT-SIGNATURE header -> 402 + challenge. With a valid header,
+    // WAITSI verifies the EIP-712 signature AND the on-chain USDC Transfer to
+    // payTo (replay ring in `payments`), then seeds the discovery's spendable
+    // budget from the verified asset-backed payment. Every `discovery` /
+    // `sponsor_rev` credit this budget later emits is therefore REAL money.
+    if (method === 'POST' && path === '/v1/sponsor/fund') {
+      const body = await readBody(req);
+      const discoveryId = Number(body?.discoveryId);
+      if (!discoveryId) return json(res, 400, { error: 'discoveryId required (an integer)' });
+      const gate = makeGate({ db });
+      if (!gate.configured) {
+        return json(res, 503, {
+          error: 'x402_not_configured',
+          detail: 'set WAITSI_X402_PAYTO (or export X402_EXECUTOR_PK) + a funded executor to receive on-chain settlement',
+        });
+      }
+      const resource = `sponsor-fund-${discoveryId}`;
+      const header = req.headers['payment-signature'];
+      if (!header) return gate.send402(res, resource);
+      try {
+        const { payer, txHash } = await gate.verifyPayment(header);
+        const disco = await db.getDiscovery(discoveryId);
+        if (!disco) return json(res, 404, { error: 'unknown discovery' });
+        const amt = gate.cfg.priceAtomic;
+        const funded = await db.fundDiscoveryBudget(discoveryId, Number(amt));
+        return json(res, 200, {
+          funded: true,
+          discoveryId,
+          amountMicro: Number(amt),
+          priorRemaining: disco.budget_remaining,
+          budgetRemaining: funded.budget_remaining,
+          budgetTotal: funded.budget_total,
+          txHash,
+          payer,
+        });
+      } catch (e) {
+        const code = e.code || (e.status ? String(e.status) : '');
+        const K = ['payment_already_used', 'payment_not_settled', 'signer_mismatch', 'amount_mismatch',
+          'chain_mismatch', 'payto_mismatch', 'asset_mismatch'];
+        if (K.includes(code)) return gate.send402(res, resource, code, e.message);
+        throw e;
+      }
     }
 
     // ---- sponsor-ops (admin) ----
