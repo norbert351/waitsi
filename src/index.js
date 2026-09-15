@@ -91,14 +91,6 @@ function jsonSetCookie(res, code, body, cookie) {
   res.end(payload);
 }
 
-// HTTP 302 for the OAuth redirect leg.
-function redirect(res, loc, setCookie) {
-  const headers = { 'Location': loc, 'Cache-Control': 'no-store' };
-  if (setCookie) headers['Set-Cookie'] = setCookie;
-  res.writeHead(302, headers);
-  res.end();
-}
-
 function readBody(req, cap = 1e6) {
   return new Promise((resolve2, reject) => {
     let data = '';
@@ -454,39 +446,22 @@ const server = createServer(async (req, res) => {
       await auth.logout(req);
       return jsonSetCookie(res, 200, { ok: true }, auth.clearSessionCookie());
     }
-    // ---- Google OAuth sign-in (authorization-code flow, node:crypto JWT verify) ----
-    if (method === 'GET' && path === '/auth/google') {
-      if (!ggl.googleConfigured()) {
-        return json(res, 503, { error: 'google_oauth_not_configured', detail: 'set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET' });
-      }
-      const state = ggl.newOauthState();
-      const stateCookie = `waitsi_go_state=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=300`;
-      return redirect(res, ggl.authUrl(state, req), stateCookie);
-    }
-    if (method === 'GET' && path === '/auth/google/callback') {
-      const params = new URLSearchParams(req.url.split('?')[1] || '');
-      const state = String(params.get('state') || '');
-      const expected = auth.parseCookies(req).waitsi_go_state;
-      if (!state || !expected || state !== expected) return json(res, 400, { error: 'oauth state mismatch' });
-      const code = params.get('code');
-      if (!code) {
-        const err = params.get('error');
-        return json(res, 400, { error: err || 'google denied authorization', googleError: err || undefined });
-      }
-      try {
-        const r = await ggl.loginWithGoogle({ code, redirectUri: ggl.callbackUri(req), db });
-        if (!r.ok) return json(res, r.status || 500, { error: r.error, detail: r.detail });
-        const clearState = '; waitsi_go_state=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0';
-        return redirect(res, '/account', auth.sessionCookie(r.token) + clearState);
-      } catch (e) {
-        return json(res, 502, { error: 'oauth failed', detail: e.message });
-      }
-    }
+    // ---- Google Sign-In (client-side only: GIS ID token, JWKS-verified, no secret) ----
     if (method === 'GET' && path === '/auth/google/config') {
       return json(res, 200, {
         configured: ggl.googleConfigured(),
-        clientId: ggl.GOOGLE_CLIENT_ID ? `${ggl.GOOGLE_CLIENT_ID.slice(0, 8)}…${ggl.GOOGLE_CLIENT_ID.slice(-4)}` : null,
+        clientId: ggl.googleClientId() || null,   // the SPA's GIS button needs the full ID
       });
+    }
+    // Accept a Google ID token delivered by the GIS client, verify it (public
+    // JWKS, aud === client id), bind the sub, and mint the normal session.
+    if (method === 'POST' && path === '/auth/google/token') {
+      const body = await readBody(req);
+      const r = await ggl.loginWithGoogleToken({ credential: body?.credential, db });
+      if (!r.ok) return json(res, r.status || 500, { error: r.error, detail: r.detail });
+      const token = auth.newSessionToken();
+      await db.createSession(r.user.id, token, auth.sessionExpiry());
+      return jsonSetCookie(res, 200, { user: r.user }, auth.sessionCookie(token));
     }
     // ---- Wallet identity (SIWE): issue a challenge to sign ----
     if (method === 'POST' && path === '/wallet/challenge') {

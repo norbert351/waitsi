@@ -234,7 +234,7 @@ export WAITSI_DB_SCHEMA="waitsi"                                     # optional 
 ```bash
 npm start        # :3120 — backend + wait-surface at /
 npm run seed     # seed sponsor discovery catalog
-npm run smoke    # 75 tests: 23 pure unit tests + 52 integration (auth, payouts, vouchers,
+npm run smoke    # 73 tests: 21 pure unit tests + 52 integration (auth, payouts, vouchers,
                  # redemption, shop, streaks, attestation, multi-agent hub, sponsor ops)
 ```
 
@@ -247,7 +247,7 @@ fails loudly with the real boot error instead of an opaque `fetch failed`.
 Run the fast half alone while iterating — it needs no server:
 
 ```bash
-node --test test/units.test.js     # 23 tests, ~180ms — level curve, clamp, split math, pricing, OAuth + wallet helpers
+node --test test/units.test.js     # 21 tests, ~180ms — level curve, clamp, split math, pricing, OAuth + wallet helpers
 ```
 
 **Admin token.** `/admin/campaigns` and `/admin/sweep` are operator routes. Set
@@ -300,11 +300,13 @@ honest `503 x402_not_configured`; without `WAITSI_ANCHOR_PK` the anchor reports
 Self-contained login (no external provider): `POST /account/register|login|logout`,
 `GET /account/me`. Passwords are scrypt-hashed with a per-user salt; sessions are
 opaque tokens in an HttpOnly `SameSite=Lax` cookie. **Sign in with Google** is a
-first-class option: `GET /auth/google` starts the authorization-code flow (else
-`503 google_oauth_not_configured`), the callback verifies Google's RS256 ID token
-with `node:crypto` against the published JWKS, binds the verified `sub` to a
-WAITSI user, and mints the same session cookie. Env: `GOOGLE_CLIENT_ID`,
-`GOOGLE_CLIENT_SECRET`, optional `GOOGLE_REDIRECT_URI`. **Sign in with your
+first-class option: the GIS "Continue with Google" button returns an ID token
+(`POST /auth/google/token`); the backend verifies its RS256 signature against
+Google's published JWKS, checks `aud` === our Client ID, binds the verified
+`sub` to a WAITSI user, and mints the same session cookie. Env: only
+`GOOGLE_CLIENT_ID` (no client secret, no redirect URI). When it's unset the
+button hides and the endpoint answers `503 google_oauth_not_configured`.
+**Sign in with your
 wallet** is also first-class (SIWE-style): `POST /wallet/challenge` returns an
 EIP-4361 message to sign; `POST /wallet/login` verifies the ECDSA signature via
 `viem`'s local `verifyMessage` against a single-use nonce and mints a session

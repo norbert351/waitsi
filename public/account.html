@@ -55,7 +55,7 @@
         <button id="login" class="ghost">Log in</button>
       </div>
       <div class="divider" style="margin-top:16px"><span>or</span></div>
-      <a id="googlebtn" class="gbtn" href="/auth/google">Continue with Google</a>
+      <div id="googlebtn" style="min-height:44px;margin-top:12px"></div>
       <button id="walletbtn" class="ghost" style="margin-top:12px">Sign in with wallet</button>
       <div class="goerr" id="goerr" style="display:none"></div>
       <div class="msg" id="msg"></div>
@@ -174,19 +174,35 @@ $('walletattach').onclick = async () => {
 
 refresh();
 
-// Probe Google OAuth availability so the button degrades honestly when the
-// server has no GOOGLE_CLIENT_SECRET configured.
-(async () => {
-  try {
-    const r = await fetch('/auth/google/config');
-    const c = await r.json();
-    if (c && c.configured) return;
-    const btn = $('googlebtn'), err = $('goerr');
-    btn.style.display = 'none';
+// Google Sign-In (client-side only): load GIS, render the button, and send the
+// returned ID token to /auth/google/token for JWKS verification. No secret.
+async function initGoogle() {
+  const wrap = $('googlebtn'), err = $('goerr');
+  let cfg = { configured: false };
+  try { cfg = await (await fetch('/auth/google/config')).json(); } catch { /* keep false */ }
+  if (!cfg || !cfg.configured || !cfg.clientId) {
+    wrap.style.display = 'none';
     err.style.display = 'block';
     err.textContent = 'Google sign-in is not configured on this instance.';
-  } catch { /* leave the button as-is on network failure */ }
-})();
+    return;
+  }
+  const s = document.createElement('script');
+  s.src = 'https://accounts.google.com/gsi/client'; s.async = true; s.defer = true;
+  s.onload = () => {
+    google.accounts.id.initialize({
+      client_id: cfg.clientId,
+      callback: async (resp) => {
+        if (!resp || !resp.credential) return;
+        const r = await api('POST', '/auth/google/token', { credential: resp.credential });
+        if (r.status === 200) { await refresh(); }
+        else { err.style.display = 'block'; err.textContent = r.body?.error || 'google sign-in failed'; }
+      },
+    });
+    google.accounts.id.renderButton(wrap, { theme: 'outline', size: 'large', width: wrap.clientWidth || 320, text: 'continue_with' });
+  };
+  document.head.appendChild(s);
+}
+initGoogle();
 </script>
 </body>
 </html>

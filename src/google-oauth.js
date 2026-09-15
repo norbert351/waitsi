@@ -1,80 +1,38 @@
-// Google OAuth (authorization-code flow) for WAITSI sign-in.
+// Google Sign-In — CLIENT-SIDE ONLY (Google Identity Services), no secret.
 //
-// Zero new dependencies: the code exchange is POST /oauth2.googleapis.com/token
-// and the ID token is verified with node:crypto against Google's published
-// JWKS (RS256). On success we bind the verified Google `sub`/email to a WAITSI
-// user and mint the same HttpOnly session cookie the native login uses, so
-// Google sign-in and password sign-in share one session layer.
+// The pattern that works with nothing but the Client ID:
+//   1. The page loads Google's GIS library and renders the button.
+//   2. GIS returns an ID token (JWT) in the browser.
+//   3. The page POSTs that token to /auth/google/token.
+//   4. The backend verifies it against Google's published JWKS (RS256,
+//      node:crypto) — aud === our client ID + iss/exp/sub checks — then binds
+//      the verified `sub` to a WAITSI user and mints the normal session cookie.
 //
-// Env:
-//   GOOGLE_CLIENT_ID        — required
-//   GOOGLE_CLIENT_SECRET    — required (confidential client)
-//   GOOGLE_REDIRECT_URI     — optional; defaults to <host>/auth/google/callback
-import { createPublicKey, verify, randomBytes } from 'node:crypto';
+// No client secret anywhere: a client-side GIS token is verified by public-key
+// JWT, which needs only the Client ID. Env: GOOGLE_CLIENT_ID (required).
+import { createPublicKey, verify } from 'node:crypto';
 
 export const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
-export const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
-
-export const OAUTH_AUTH = 'https://accounts.google.com/o/oauth2/v2/auth';
-export const OAUTH_TOKEN = 'https://oauth2.googleapis.com/token';
 export const JWKS_URL = 'https://www.googleapis.com/oauth2/v3/certs';
 
 const AUTH_ALLOWED_ISS = new Set(['accounts.google.com', 'https://accounts.google.com']);
-const SCOPE = 'openid email profile';
 
+// Live accessor (reads env at call time, not import time).
+export function googleClientId() {
+  return process.env.GOOGLE_CLIENT_ID || '';
+}
+// For callers that want the const at import time (stable after boot).
+export function googleClientIdAtImport() {
+  return GOOGLE_CLIENT_ID;
+}
+
+// Client-side flow is configured as soon as the public Client ID exists.
+// Read env at call time so it stays reactive (and testable).
 export function googleConfigured() {
-  return Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
+  return Boolean(process.env.GOOGLE_CLIENT_ID);
 }
 
-// Callback URL an IDP must have whitelisted. Overridable for prod; defaults to
-// the request's own host so localhost and the Render host both resolve without
-// hardcoding.
-export function callbackUri(req) {
-  if (process.env.GOOGLE_REDIRECT_URI) return process.env.GOOGLE_REDIRECT_URI;
-  const host = (req.headers?.host || '').split(',')[0].trim();
-  return `https://${host}/auth/google/callback`;
-}
-
-export function newOauthState() {
-  return randomBytes(24).toString('hex');
-}
-
-export function authUrl(state, req) {
-  const p = new URLSearchParams({
-    client_id: GOOGLE_CLIENT_ID,
-    redirect_uri: callbackUri(req),
-    response_type: 'code',
-    scope: SCOPE,
-    state,
-    nonce: randomBytes(16).toString('hex'),
-    access_type: 'online',
-    prompt: 'select_account',
-  });
-  return `${OAUTH_AUTH}?${p.toString()}`;
-}
-
-// ---- token exchange ----
-async function exchangeCode(code, redirectUri) {
-  const body = new URLSearchParams({
-    code,
-    client_id: GOOGLE_CLIENT_ID,
-    client_secret: GOOGLE_CLIENT_SECRET,
-    redirect_uri: redirectUri,
-    grant_type: 'authorization_code',
-  });
-  const r = await fetch(OAUTH_TOKEN, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: body.toString(),
-  });
-  if (!r.ok) {
-    const text = await r.text();
-    throw new Error(`google token exchange failed ${r.status}: ${text.slice(0, 200)}`);
-  }
-  return r.json(); // { access_token, id_token, expires_in, token_type }
-}
-
-// ---- ID token verification (RS256, node:crypto, no deps) ----
+// ---- ID token verification (RS256, node:crypto, no deps, no secret) ----
 function b64url(s) {
   return Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64');
 }
@@ -125,14 +83,21 @@ export function handleFromEmail(email, sub) {
   return `g_${sub.slice(0, 20)}`;
 }
 
-// Full login: exchange code → verify ID token → bind identity → mint session.
-// Returns { ok, user, token } (token is the *session* bearer, not Google's).
-export async function loginWithGoogle({ code, redirectUri, db }) {
+// Verify a client-side GIS ID token and bind/claim the WAITSI user.
+// Returns { ok, user, error?, status? }.
+export async function loginWithGoogleToken({ credential, db, clientId = googleClientId() }) {
   if (!googleConfigured()) {
-    return { ok: false, status: 503, error: 'google_oauth_not_configured', detail: 'set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET' };
+    return { ok: false, status: 503, error: 'google_oauth_not_configured', detail: 'set GOOGLE_CLIENT_ID' };
   }
-  const tok = await exchangeCode(code, redirectUri);
-  const payload = await verifyIdToken(tok.id_token);
+  if (typeof credential !== 'string' || !credential) {
+    return { ok: false, status: 400, error: 'id token (credential) required' };
+  }
+  let payload;
+  try {
+    payload = await verifyIdToken(credential, clientId);
+  } catch (e) {
+    return { ok: false, status: 401, error: `invalid google id token: ${e.message}` };
+  }
   const email = String(payload.email || '').toLowerCase();
 
   const existing = await db.findUserByGoogleSub(payload.sub);
@@ -140,8 +105,6 @@ export async function loginWithGoogle({ code, redirectUri, db }) {
   if (existing) {
     user = existing;
   } else {
-    // On first-ever Google sign-in, claim/create a handle from the email and
-    // bind the Google sub. If the handle somehow collides, fall back to sub.
     let handle = handleFromEmail(email, payload.sub);
     user = await db.upsertUserByGoogle(payload.sub, handle, email);
     if (!user) {

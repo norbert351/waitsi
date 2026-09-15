@@ -59,12 +59,9 @@ services:
       # X402_EXECUTOR_PK) — set it in the dashboard, never in the repo.
       - key: WAITSI_ANCHOR_PK
         sync: false
-      # ---- Google OAuth sign-in (confidential-client authorization-code flow) ----
-      # Set BOTH in the dashboard (never in the repo). Without them the
-      # "Continue with Google" button hides and /auth/google answers 503.
+      # ---- Google Sign-In (client-side only, Google Identity Services) ----
+      # Only the public Client ID is needed — the SPA's GIS button returns an
+      # ID token which the backend verifies via Google's public JWKS. NO client
+      # secret required. Without the ID the button hides and /auth/google answers 503.
       - key: GOOGLE_CLIENT_ID
         value: "517988614557-lnfoegae15ksauft2nvgfgok5d36gshs.apps.googleusercontent.com"
-      - key: GOOGLE_CLIENT_SECRET
-        sync: false
-      - key: GOOGLE_REDIRECT_URI
-        value: "https://waitsi-j9qk.onrender.com/auth/google/callback"

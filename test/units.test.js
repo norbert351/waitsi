@@ -244,8 +244,8 @@ test('effect basis points map to the documented bonuses', () => {
   assert.equal(effectBps(null).xpBonusPer10s, 0);
 });
 
-// ---- Google OAuth helpers (pure; no network / no server) ----
-import { handleFromEmail, newOauthState, callbackUri, googleConfigured } from '../src/google-oauth.js';
+// ---- Google Sign-In helpers (pure; no network / no server) ----
+import { handleFromEmail, googleConfigured } from '../src/google-oauth.js';
 
 test('google handle derives a valid handle from the verified email', () => {
   const h = handleFromEmail('Zubby.Crypt+agent@gmail.com', '1234567890abcdef');
@@ -258,25 +258,13 @@ test('google handle falls back to the sub when the email yields nothing usable',
   assert.match(h, /^g_abcdef0123456789$/);
 });
 
-test('oauth state is 48 hex chars (24 random bytes)', () => {
-  assert.match(newOauthState(), /^[0-9a-f]{48}$/);
-});
-
-test('callbackUri defaults to the request host when not overridden', () => {
-  delete process.env.GOOGLE_REDIRECT_URI;
-  const req = { headers: { host: 'waitsi-j9qk.onrender.com' } };
-  assert.equal(callbackUri(req), 'https://waitsi-j9qk.onrender.com/auth/google/callback');
-});
-
-test('googleConfigured is false until both ID and secret are present', () => {
-  // In CI/test env neither GOOGLE_CLIENT_ID nor SECRET is set → honest off.
+test('googleConfigured is false until a client id is present', () => {
   const wasId = process.env.GOOGLE_CLIENT_ID;
-  const wasSecret = process.env.GOOGLE_CLIENT_SECRET;
   delete process.env.GOOGLE_CLIENT_ID;
-  delete process.env.GOOGLE_CLIENT_SECRET;
   assert.equal(googleConfigured(), false);
-  if (wasId !== undefined) process.env.GOOGLE_CLIENT_ID = wasId;
-  if (wasSecret !== undefined) process.env.GOOGLE_CLIENT_SECRET = wasSecret;
+  process.env.GOOGLE_CLIENT_ID = 'x.apps.googleusercontent.com';
+  assert.equal(googleConfigured(), true);
+  if (wasId !== undefined) process.env.GOOGLE_CLIENT_ID = wasId; else delete process.env.GOOGLE_CLIENT_ID;
 });
 
 // ---- Wallet SIWE helpers (pure + real-key signature verify; no server) ----
