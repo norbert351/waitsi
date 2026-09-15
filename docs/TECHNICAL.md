@@ -84,6 +84,20 @@ DDL.
   `WAITSI_ADMIN_TOKEN` (Bearer). When unset the routes are open and the
   response *says so* (`unguarded: true`) — never a silent false gate.
 
+### Google OAuth (authorization-code flow)
+
+`GET /auth/google` → 302 to Google (state stored in an HttpOnly cookie) →
+callback → code exchanged at `oauth2.googleapis.com/token` → the returned **ID
+token is verified with `node:crypto`** (RS256 against Google's published JWKS,
+plus `aud`/`iss`/`exp`/`sub` checks) → the verified `sub` is bound to a WAITSI
+user via `users.google_sub` (unique, partial index) → the normal HttpOnly
+session cookie is minted. No new dependencies (`src/google-oauth.js`). Env:
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, optional `GOOGLE_REDIRECT_URI`
+(defaults to `<host>/auth/google/callback`). When either credential is unset the
+button hides and the endpoint answers `503 google_oauth_not_configured`. A
+`GET /auth/google/callback` with a mismatched/absent state is rejected `400`
+(CSRF).
+
 ---
 
 ## 5. On-chain (Base Sepolia, chain `84532`)
@@ -136,8 +150,9 @@ own auto-created schema and its own port so parallel files never collide;
 `test/harness.js` resolves the DB URL (env → `/tmp/wdb_url.txt`), forces
 IPv4-first DNS, and fails loudly with the real boot error.
 
-`test/units.test.js` (12 tests, ~140 ms, no server) covers level curve, clamp,
-split math, pricing. The integration files cover auth, payouts/vouchers,
+`test/units.test.js` (17 tests, ~140 ms, no server) covers level curve, clamp,
+split math, pricing, and the Google-OAuth pure helpers. The integration files
+cover auth, payouts/vouchers,
 redemption, shop, streaks, attestation tiers, multi-agent concurrency, sponsor
 ops, and the x402 loop.
 

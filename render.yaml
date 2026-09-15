@@ -59,3 +59,12 @@ services:
       # X402_EXECUTOR_PK) — set it in the dashboard, never in the repo.
       - key: WAITSI_ANCHOR_PK
         sync: false
+      # ---- Google OAuth sign-in (confidential-client authorization-code flow) ----
+      # Set BOTH in the dashboard (never in the repo). Without them the
+      # "Continue with Google" button hides and /auth/google answers 503.
+      - key: GOOGLE_CLIENT_ID
+        value: "517988614557-lnfoegae15ksauft2nvgfgok5d36gshs.apps.googleusercontent.com"
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        value: "https://waitsi-j9qk.onrender.com/auth/google/callback"

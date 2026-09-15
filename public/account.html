@@ -18,6 +18,10 @@
   input:focus{outline:none;border-color:var(--sprout)}
   button{background:var(--sprout);color:#08130a;border:0;border-radius:10px;padding:12px 16px;font-weight:700;font-size:15px;cursor:pointer;width:100%}
   button.ghost{background:transparent;color:var(--text2);border:1px solid var(--line);font-weight:600}
+  a.gbtn{display:flex;align-items:center;justify-content:center;gap:10px;background:#fff;color:#1a1a1a;border:1px solid var(--line);border-radius:10px;padding:12px 16px;font-weight:600;font-size:15px;text-decoration:none;margin-top:12px}
+  .divider{display:flex;align-items:center;gap:10px;color:var(--text2);font-size:12px;text-transform:uppercase;letter-spacing:.08em;margin:0 0 2px}
+  .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--line)}
+  .goerr{font-size:12px;color:var(--danger);margin-top:8px}
   button:disabled{opacity:.5;cursor:default}
   .row{display:flex;gap:10px}
   .row button{width:auto;flex:1}
@@ -50,6 +54,9 @@
         <button id="register">Register</button>
         <button id="login" class="ghost">Log in</button>
       </div>
+      <div class="divider" style="margin-top:16px"><span>or</span></div>
+      <a id="googlebtn" class="gbtn" href="/auth/google">Continue with Google</a>
+      <div class="goerr" id="goerr" style="display:none"></div>
       <div class="msg" id="msg"></div>
     </div>
   </div>
@@ -127,6 +134,20 @@ $('save').onclick = async () => {
 };
 
 refresh();
+
+// Probe Google OAuth availability so the button degrades honestly when the
+// server has no GOOGLE_CLIENT_SECRET configured.
+(async () => {
+  try {
+    const r = await fetch('/auth/google/config');
+    const c = await r.json();
+    if (c && c.configured) return;
+    const btn = $('googlebtn'), err = $('goerr');
+    btn.style.display = 'none';
+    err.style.display = 'block';
+    err.textContent = 'Google sign-in is not configured on this instance.';
+  } catch { /* leave the button as-is on network failure */ }
+})();
 </script>
 </body>
 </html>

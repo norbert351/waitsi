@@ -30,6 +30,7 @@ import { makeGate } from './x402.js';
 import { makeVaultWriter } from './onchain.js';
 import * as auth from './auth.js';
 import { CATEGORIES } from './engine.js';
+import * as ggl from './google-oauth.js';
 
 const PORT = process.env.PORT || 3120;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -87,6 +88,14 @@ function jsonSetCookie(res, code, body, cookie) {
     'Set-Cookie': cookie,
   });
   res.end(payload);
+}
+
+// HTTP 302 for the OAuth redirect leg.
+function redirect(res, loc, setCookie) {
+  const headers = { 'Location': loc, 'Cache-Control': 'no-store' };
+  if (setCookie) headers['Set-Cookie'] = setCookie;
+  res.writeHead(302, headers);
+  res.end();
 }
 
 function readBody(req, cap = 1e6) {
@@ -443,6 +452,40 @@ const server = createServer(async (req, res) => {
     if (method === 'POST' && path === '/account/logout') {
       await auth.logout(req);
       return jsonSetCookie(res, 200, { ok: true }, auth.clearSessionCookie());
+    }
+    // ---- Google OAuth sign-in (authorization-code flow, node:crypto JWT verify) ----
+    if (method === 'GET' && path === '/auth/google') {
+      if (!ggl.googleConfigured()) {
+        return json(res, 503, { error: 'google_oauth_not_configured', detail: 'set GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET' });
+      }
+      const state = ggl.newOauthState();
+      const stateCookie = `waitsi_go_state=${state}; HttpOnly; SameSite=Lax; Path=/; Max-Age=300`;
+      return redirect(res, ggl.authUrl(state, req), stateCookie);
+    }
+    if (method === 'GET' && path === '/auth/google/callback') {
+      const params = new URLSearchParams(req.url.split('?')[1] || '');
+      const state = String(params.get('state') || '');
+      const expected = auth.parseCookies(req).waitsi_go_state;
+      if (!state || !expected || state !== expected) return json(res, 400, { error: 'oauth state mismatch' });
+      const code = params.get('code');
+      if (!code) {
+        const err = params.get('error');
+        return json(res, 400, { error: err || 'google denied authorization', googleError: err || undefined });
+      }
+      try {
+        const r = await ggl.loginWithGoogle({ code, redirectUri: ggl.callbackUri(req), db });
+        if (!r.ok) return json(res, r.status || 500, { error: r.error, detail: r.detail });
+        const clearState = '; waitsi_go_state=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0';
+        return redirect(res, '/account', auth.sessionCookie(r.token) + clearState);
+      } catch (e) {
+        return json(res, 502, { error: 'oauth failed', detail: e.message });
+      }
+    }
+    if (method === 'GET' && path === '/auth/google/config') {
+      return json(res, 200, {
+        configured: ggl.googleConfigured(),
+        clientId: ggl.GOOGLE_CLIENT_ID ? `${ggl.GOOGLE_CLIENT_ID.slice(0, 8)}…${ggl.GOOGLE_CLIENT_ID.slice(-4)}` : null,
+      });
     }
     if (method === 'GET' && path === '/account/me') {
       const me = await auth.fromRequest(req);

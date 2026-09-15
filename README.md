@@ -234,7 +234,7 @@ export WAITSI_DB_SCHEMA="waitsi"                                     # optional 
 ```bash
 npm start        # :3120 — backend + wait-surface at /
 npm run seed     # seed sponsor discovery catalog
-npm run smoke    # 64 tests: 12 pure unit tests + 52 integration (auth, payouts, vouchers,
+npm run smoke    # 69 tests: 17 pure unit tests + 52 integration (auth, payouts, vouchers,
                  # redemption, shop, streaks, attestation, multi-agent hub, sponsor ops)
 ```
 
@@ -247,7 +247,7 @@ fails loudly with the real boot error instead of an opaque `fetch failed`.
 Run the fast half alone while iterating — it needs no server:
 
 ```bash
-node --test test/units.test.js     # 12 tests, ~140ms — level curve, clamp, split math, pricing
+node --test test/units.test.js     # 17 tests, ~140ms — level curve, clamp, split math, pricing
 ```
 
 **Admin token.** `/admin/campaigns` and `/admin/sweep` are operator routes. Set
@@ -296,10 +296,17 @@ hermetic Anvil suite (`test/x402.test.js`) proves the full loop with no external
 honest `503 x402_not_configured`; without `WAITSI_ANCHOR_PK` the anchor reports
 `mode:"logging"` (local receipts) rather than pretending to be on-chain.
 
-## Accounts & saved history (native auth)
+## Accounts & saved history (native auth + Google sign-in)
 Self-contained login (no external provider): `POST /account/register|login|logout`,
 `GET /account/me`. Passwords are scrypt-hashed with a per-user salt; sessions are
-opaque tokens in an HttpOnly `SameSite=Lax` cookie. **Save results/history per user**
-via `POST|GET /api/saved` (auth-gated, per-user isolated). The public commons stays
-open; an account only adds private history. UI at `/account`; the surface shows a
+opaque tokens in an HttpOnly `SameSite=Lax` cookie. **Sign in with Google** is a
+first-class option: `GET /auth/google` starts the authorization-code flow (else
+`503 google_oauth_not_configured`), the callback verifies Google's RS256 ID token
+with `node:crypto` against the published JWKS, binds the verified `sub` to a
+WAITSI user, and mints the same session cookie. Env: `GOOGLE_CLIENT_ID`,
+`GOOGLE_CLIENT_SECRET`, optional `GOOGLE_REDIRECT_URI`. **Save results/history
+per user** via `POST|GET /api/saved` (auth-gated, per-user isolated). The public
+commons stays open; an account only adds private history. UI at `/account` (a
+"Continue with Google" button appears once the server reports it configured); the
+surface shows a
 floating `Vault · Log in` launcher.

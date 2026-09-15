@@ -60,7 +60,7 @@ node bin/waitsi.mjs -- npm run build   # CLI-attached wait, banks + claims
 Tests:
 
 ```bash
-npm run smoke                         # unit + integration (64 tests)
+npm run smoke                         # unit + integration (69 tests)
 ```
 
 On-chain (Base Sepolia, 84532): USDC `0x036C…CF7e`, payTo `0x3360DA…F7C2`,
@@ -78,6 +78,7 @@ replay → budget seeded + on-chain receipt.
 | Native auth + session-gated paid endpoints | ✅ | Live 401/403 on missing/wrong token |
 | Admin routes guarded | ✅ | `/admin/*` → `admin token required` w/o Bearer |
 | Keep-alive through judging | ✅ | Render free-tier cron enabled (every 10 m) |
+| Google OAuth sign-in | ✅ implemented · **live-pending creds** | `src/google-oauth.js` (RS256 JWT verify, no deps); button + endpoints verified; needs `GOOGLE_CLIENT_SECRET` + authorized redirect URI to go live |
 | Login-with-Commons (OIDC) | ⚠️ **Not integrated** | Auth-gated on Commons; creds pending — honest gap, not fake |
 
 ## Honest limits

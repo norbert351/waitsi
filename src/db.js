@@ -254,6 +254,9 @@ export async function initSchema() {
   // never adds columns — see the migration note in skills/zerodep-node-backend).
   await q(`ALTER TABLE ${S}users ADD COLUMN IF NOT EXISTS password_hash TEXT`);
   await q(`ALTER TABLE ${S}users ADD COLUMN IF NOT EXISTS password_salt TEXT`);
+  await q(`ALTER TABLE ${S}users ADD COLUMN IF NOT EXISTS google_sub TEXT`);
+  await q(`ALTER TABLE ${S}users ADD COLUMN IF NOT EXISTS email TEXT`);
+  await q(`CREATE UNIQUE INDEX IF NOT EXISTS ${SCHEMA ? SCHEMA + '_' : ''}users_google_sub_uniq ON ${S}users (google_sub) WHERE google_sub IS NOT NULL`);
   await q(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS token TEXT`);
   await q(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS stream_banked INTEGER NOT NULL DEFAULT 0`);
   await q(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS attested_tier TEXT`);
@@ -438,6 +441,24 @@ export async function createUserWithPassword(handle, hash, salt) {
 
 export async function setUserPassword(userId, hash, salt) {
   return one(`UPDATE ${S}users SET password_hash = $2, password_salt = $3 WHERE id = $1 RETURNING id, handle`, [userId, hash, salt]);
+}
+
+// ---- Google OAuth bindings ----
+export async function findUserByGoogleSub(sub) {
+  return one(`SELECT id, handle, email FROM ${S}users WHERE google_sub = $1`, [sub]);
+}
+
+// Create a user bound to a Google sub, or claim an existing (non-Google)
+// handle by binding google_sub to it so the world/history is preserved on
+// first sign-in. Returns null on a genuine conflict.
+export async function upsertUserByGoogle(sub, handle, email) {
+  return one(
+    `INSERT INTO ${S}users (google_sub, handle, email) VALUES ($1, $2, $3)
+     ON CONFLICT (handle) DO UPDATE SET google_sub = $1, email = $3
+       WHERE ${S}users.google_sub IS NULL
+     RETURNING id, handle`,
+    [sub, handle, email],
+  );
 }
 
 export async function createSession(userId, token, expiresAt) {
