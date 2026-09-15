@@ -322,8 +322,11 @@ EIP-4361 message to sign; `POST /wallet/login` verifies the ECDSA signature via
 (the wallet becomes the user). A signed-in account can **attach a wallet as its
 payout destination** (`POST /account/wallet/attach`) so the `$CMNS` you claim
 has a clear on-chain home. **Save results/history
-per user** via `POST|GET /api/saved` (auth-gated, per-user isolated). The public
-commons stays open; an account only adds private history. UI at `/account` (a
+per user** via `POST|GET /api/saved` (auth-gated, per-user isolated). The
+marketing landing, public leaderboard and Vault stay open; **starting a paid
+wait requires a real account** — the wait-surface's "Start waiting" opens an
+inline create-account / log-in gate (Google + wallet link to `/account`) and
+the navbar shows your handle. UI at `/account` (a
 "Continue with Google" button appears once the server reports it configured); the
 surface shows a
 floating `Vault · Log in` launcher.

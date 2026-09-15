@@ -79,7 +79,8 @@ DDL.
   scrypt passwords + per-user salt, opaque tokens in an HttpOnly
   `SameSite=Lax` cookie. **Saved results/history** per user via
   `POST|GET /api/saved` (auth-gated, per-user isolated). The public commons
-  stays open; an account only adds private history.
+  stays open; **starting a paid wait requires a real account** (the surface
+  gates "Start waiting" behind create-account / log-in).
 - **Admin ops** (`/admin/campaigns`, `/admin/sweep`) gated by
   `WAITSI_ADMIN_TOKEN` (Bearer). When unset the routes are open and the
   response *says so* (`unguarded: true`) — never a silent false gate.
