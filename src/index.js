@@ -114,8 +114,8 @@ function readBody(req, cap = 1e6) {
 }
 
 // Serve a file from public/ — path-traversal safe (only known extensions, only
-// filenames, never ../). GET / -> public/index.html
-function serveStatic(res, pathname) {
+// filenames, never ../). HEAD answers headers-only (link previewers issue HEAD).
+function serveStatic(res, pathname, method = 'GET') {
   const rel = pathname === '/' ? '/index.html' : pathname;
   const ext = extname(rel);
   if (!MIME[ext]) return false;
@@ -123,7 +123,8 @@ function serveStatic(res, pathname) {
   if (!full.startsWith(PUBLIC_DIR)) return false;
   if (!existsSync(full) || !statSync(full).isFile()) return false;
   cors(res);
-  res.writeHead(200, { 'Content-Type': MIME[ext], 'Cache-Control': 'no-store' });
+  res.writeHead(200, { 'Content-Type': MIME[ext], 'Cache-Control': 'no-store', 'Content-Length': statSync(full).size });
+  if (method === 'HEAD') { res.end(); return true; }   // headers only
   res.end(readFileSync(full));
   return true;
 }
@@ -622,7 +623,7 @@ const server = createServer(async (req, res) => {
     if (method === 'GET' && path === '/surface') {
       return serveHtml(res, 'index.html');
     }
-    if (method === 'GET' && serveStatic(res, path)) {
+    if ((method === 'GET' || method === 'HEAD') && serveStatic(res, path, method)) {
       return;
     }
 
