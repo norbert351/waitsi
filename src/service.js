@@ -791,19 +791,26 @@ export async function getBoard(userIdOrHandle) {
     : await db.getOrCreateUser(userIdOrHandle);
   const world = await db.getWorld(user.id);
   const level = applyLevels(world.level, world.xp);
-  const earned = await db.sumEarnedMicro(user.id);
-  const claimed = await db.sumClaimedMicro(user.id);
-  const [rank, lbSize, ledger, totalMicro, completedWaits, outstandingMicro, streak, activity, cosmetics, upgrades] = await Promise.all([
-    db.rankOf(user.id),
-    db.leaderboard(10000).then((l) => l.length),
-    db.tallyByKind(user.id),
-    db.sumLedger(user.id),
-    db.sessionCount(user.id),
-    db.sumOutstandingMicro(user.id),
-    db.getStreak(user.id),
-    db.recentActivity(user.id, 14),
-    db.listCosmetics(user.id),
-    db.ownedUpgrades(user.id),
+  // Neon's pooler can transiently reject a single query during burst; one bad
+  // read shouldn't 500 the whole scoreboard a judge is looking at. Retry once.
+  const q = async (fn, tries = 2) => {
+    for (let i = 0; i < tries; i++) {
+      try { return await fn(); } catch (e) { if (i === tries - 1) throw e; }
+    }
+  };
+  const [earned, claimed, rank, lbSize, ledger, totalMicro, completedWaits, outstandingMicro, streak, activity, cosmetics, upgrades] = await Promise.all([
+    q(() => db.sumEarnedMicro(user.id)),
+    q(() => db.sumClaimedMicro(user.id)),
+    q(() => db.rankOf(user.id)),
+    q(async () => (await db.leaderboard(10000)).length),
+    q(() => db.tallyByKind(user.id)),
+    q(() => db.sumLedger(user.id)),
+    q(() => db.sessionCount(user.id)),
+    q(() => db.sumOutstandingMicro(user.id)),
+    q(() => db.getStreak(user.id)),
+    q(() => db.recentActivity(user.id, 14)),
+    q(() => db.listCosmetics(user.id)),
+    q(() => db.ownedUpgrades(user.id)),
   ]);
   return {
     user: { id: user.id, handle: user.handle },

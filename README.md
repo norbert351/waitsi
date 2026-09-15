@@ -236,7 +236,7 @@ export WAITSI_DB_SCHEMA="waitsi"                                     # optional 
 ```bash
 npm start        # :3120 — backend + wait-surface at /
 npm run seed     # seed sponsor discovery catalog
-npm run smoke    # 73 tests: 21 pure unit tests + 52 integration (auth, payouts, vouchers,
+npm run smoke    # 88 tests: 21 pure unit tests + 67 integration (auth, payouts, vouchers,
                  # redemption, shop, streaks, attestation, multi-agent hub, sponsor ops)
 ```
 
@@ -251,6 +251,13 @@ Run the fast half alone while iterating — it needs no server:
 ```bash
 node --test test/units.test.js     # 21 tests, ~180ms — level curve, clamp, split math, pricing, OAuth + wallet helpers
 ```
+
+**Dev note (constrained VMs):** against a **cloud** Neon DB, running every file in
+parallel (`node --test test/*.test.js`) fans out ~9 servers onto one pooler and
+can transiently 500 a read (mitigated: `/board` retries each query once). On a
+local Postgres or an idle environment it's clean; when iterating on a slow VM,
+run files individually (`node --test test/v2.test.js`) to keep the signal fast
+and deterministic.
 
 **Admin token.** `/admin/campaigns` and `/admin/sweep` are operator routes. Set
 `WAITSI_ADMIN_TOKEN` to require `Authorization: Bearer <token>`; with it unset the routes are

@@ -60,7 +60,7 @@ node bin/waitsi.mjs -- npm run build   # CLI-attached wait, banks + claims
 Tests:
 
 ```bash
-npm run smoke                         # unit + integration (73 tests)
+npm run smoke                         # unit + integration (88 tests)
 ```
 
 On-chain (Base Sepolia, 84532): USDC `0x036C…CF7e`, payTo `0x3360DA…F7C2`,
