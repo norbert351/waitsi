@@ -146,7 +146,7 @@ try {
   if (d.sponsor) q.set('sponsor', d.sponsor);
   if (d.title) q.set('title', d.title);
   if (d.surface) q.set('surface', d.surface);
-  const url = `${base}/?${q}`;
+  const url = `${base}/surface?${q}`;
   console.log(`  ● session #${session.id} — live surface: ${url}`);
   if (opts.browser) {
     console.log(openBrowser(url)

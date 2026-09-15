@@ -25,7 +25,7 @@ Today you send a prompt and stare at a loader. WAITSI turns that dead time into
 the product: open a session while Claude/Codex/any agent thinks, and the
 wait-surface takes over the screen — a living commons that grows every second
 (level, XP vine, coins, shop upgrades, scenes, streaks). It's a **layer**: it
-attaches to any wait via a deep link (`?handle=you&agent=tool`) or a CLI that
+attaches to any wait via a deep link (`/surface?handle=you&agent=tool`) or a CLI that
 wraps any slow command (`npx -y github:norbert351/waitsi -- npm build`), and it
 treats multi-agent builders as the norm (N agents, one shared commons). And it
 **pays**: campaigns sponsor the waiting seconds (the Builder Ad Network from
@@ -35,7 +35,7 @@ payouts you claim and redeem are asset-backed, not a simulation.
 
 ## What judges can click (verification paths)
 
-- **The product:** `https://waitsi-j9qk.onrender.com/?handle=judge&agent=your-agent`
+- **The product:** `https://waitsi-j9qk.onrender.com/surface?handle=judge&agent=your-agent`
   — one-tap autostart of a real waiting session.
 - **The Vault (on-chain):** `https://waitsi-j9qk.onrender.com/vaults`
 - **The leaderboard (public "$CMNS Vault"):**
@@ -53,7 +53,7 @@ export WAITSI_DATABASE_URL="postgresql://user:pass@host:5432/db"
 export WAITSI_DB_SCHEMA=waitsi         # recommended on a shared DB
 npm run seed && npm start              # backend + wait-surface at :3120
 # verify the judged loop:
-open http://localhost:3120/?handle=you&agent=demo
+open http://localhost:3120/surface?handle=you&agent=demo
 node bin/waitsi.mjs -- npm run build   # CLI-attached wait, banks + claims
 ```
 

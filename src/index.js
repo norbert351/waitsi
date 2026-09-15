@@ -57,6 +57,7 @@ const MIME = {
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
+  '.webp': 'image/webp',
   '.ico': 'image/x-icon',
   '.json': 'application/json; charset=utf-8',
   '.woff2': 'font/woff2',
@@ -122,6 +123,21 @@ function serveStatic(res, pathname) {
   cors(res);
   res.writeHead(200, { 'Content-Type': MIME[ext], 'Cache-Control': 'no-store' });
   res.end(readFileSync(full));
+  return true;
+}
+
+// Serve an HTML surface from public/ with the floating Vault · Log-in launcher
+// injected (non-invasive string insertion, matching the old GET / behaviour).
+function serveHtml(res, file) {
+  const full = resolve(PUBLIC_DIR, file);
+  if (!existsSync(full)) return false;
+  let html = readFileSync(full, 'utf8');
+  if (!html.includes('/launcher.js')) {
+    html = html.replace('</body>', '<script src="/launcher.js?v=1"></script></body>');
+  }
+  cors(res);
+  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+  res.end(html);
   return true;
 }
 
@@ -596,18 +612,13 @@ const server = createServer(async (req, res) => {
     if (method === 'GET' && path === '/vaults' && serveStatic(res, '/vault.html')) {
       return;
     }
+    // Marketing landing — GET / and /index.html → landing.html
     if (method === 'GET' && (path === '/' || path === '/index.html')) {
-      // Inject a small floating launcher (Vault · Log in) without editing the
-      // minified wait-surface SPA — non-invasive string insertion.
-      const html = readFileSync(resolve(PUBLIC_DIR, 'index.html'), 'utf8');
-      if (!html.includes('/launcher.js')) {
-        res.setHeader('Content-Type', 'text/html; charset=utf-8');
-        res.setHeader('Cache-Control', 'no-store');
-        const injected = html.replace('</body>', '<script src="/launcher.js?v=1"></script></body>');
-        res.end(injected);
-        return;
-      }
-      return serveStatic(res, path);
+      return serveHtml(res, 'landing.html');
+    }
+    // The wait-surface product page — moved to /surface so / owns the landing.
+    if (method === 'GET' && path === '/surface') {
+      return serveHtml(res, 'index.html');
     }
     if (method === 'GET' && serveStatic(res, path)) {
       return;

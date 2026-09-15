@@ -15,7 +15,7 @@ a concrete product, so the roadmap is the expand-after-hackathon proof.
 - Real on-chain sponsors top it up: x402 rail (Base Sepolia) + hash-chained
   VaultAnchor receipts. The "you get paid to wait" story is asset-backed, not
   simulated.
-- Fits everywhere: embeddable surface (`?handle=<you>&agent=<tool>`), a CLI
+- Fits everywhere: embeddable surface (`/surface?handle=<you>&agent=<tool>`), a CLI
   that wraps any slow command (`npx -y github:norbert351/waitsi -- npm build`),
   and multi-agent concurrency (N agents, one commons).
 

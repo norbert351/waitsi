@@ -39,7 +39,8 @@ High-frequency vibe-coders / agent-heavy builders who hit a *repeated, predictab
 | POST | `/admin/campaigns` | `{sponsor, title, cpm, budgetMicro, …}` | Create (`id` absent) or patch (pause/resume/retarget) a campaign |
 | POST | `/admin/sweep` | `{stalledAfter}` | Close stalled sessions. `0` = every streamless active session. |
 | GET | `/og.svg` | `?handle=` | Share image (links no longer preview bare) |
-| GET | `/` | — | **The wait-surface UI** (self-contained SPA served from `public/`) |
+| GET | `/` | — | **Marketing landing** (`public/landing.html`) — hero → how it works → Vault → devs → CTA |
+| GET | `/surface` | — | **The wait-surface UI** (self-contained SPA served from `public/index.html`) |
 
 ### Attestation tiers — the honest-labelling contract
 
@@ -88,12 +89,13 @@ so it's excluded from claims. Each claim writes a `payouts` row and issues a det
 
 ## Wait-surface
 
-`GET /` serves the judged, self-contained wait-surface (`public/index.html`, no build
+`GET /surface` serves the judged, self-contained wait-surface (`public/index.html`, no build
 step). It drives the real backend: `POST /waits/start` → opens the **SSE stream**
 (`EventSource`) → renders the living commons (level bloom, XP vine, coins, timer,
 scene) + the sponsor card while an agent thinks → `POST /complete` → banked summary
 + ledger total + "$CMNS Vault" leaderboard. Mobile-first, dark living-commons
-terminal identity (see `design.md`).
+terminal identity (see `design.md`). The marketing landing lives at `GET /`
+(`public/landing.html`).
 
 ### v2 surfaces (each one backed a route that had no UI before)
 
@@ -152,8 +154,8 @@ as production data does — nothing is faked, and their payouts are real voucher
 
 The surface is a *layer over any wait*, so it can attach itself with no clicks:
 
-- **One-tap autostart** — `/?handle=<you>&agent=<tool>` starts a fresh paid wait
-  instantly (paste this to a judge: `https://waitsi-j9qk.onrender.com/?handle=judge&agent=your-agent`).
+- **One-tap autostart** — `/surface?handle=<you>&agent=<tool>` starts a fresh paid wait
+  instantly (paste this to a judge: `https://waitsi-j9qk.onrender.com/surface?handle=judge&agent=your-agent`).
 - **CLI-attached** — a `waitsi` CLI/agent tool already opened the session
   (`POST /waits/start`) and hands the surface `?handle=&agent=&session=&token=`;
   the page attaches to the live SSE stream and the tool settles on exit.
