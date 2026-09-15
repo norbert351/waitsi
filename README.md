@@ -1,5 +1,9 @@
 # WAITSI — the waiting layer backend
 
+> **Docs:** [ARCHITECTURE.md](ARCHITECTURE.md) · [docs/TECHNICAL.md](docs/TECHNICAL.md) ·
+> [docs/ROADMAP.md](docs/ROADMAP.md) · [docs/SUBMISSION.md](docs/SUBMISSION.md) · [design.md](design.md) ·
+> system diagram: [waitsi-architecture.html](waitsi-architecture.html)
+
 ## Problem
 Inside AI-agent tools, builders stare at a loading screen for the seconds-to-minutes an agent "thinks." That dead-time generates nothing. WAITSI productizes that wait.
 
@@ -219,17 +223,18 @@ another. A single-agent test suite **cannot** catch a lost-update bug like this.
 
 ## Run
 
-Requires a PostgreSQL connection string (Neon, RDS, or any PG ≥ 14). Set it once:
+Requires a PostgreSQL connection string (Neon, RDS, or any PG ≥ 14). Set it once
+(names only — copy `.env.example`):
 
 ```bash
-export WAITSI_DATABASE_URL="postgresql://user:pass@host:5432/db"   # or DATABASE_URL
+export WAITSI_DATABASE_URL="postgresql://user:***@host:5432/db"   # or DATABASE_URL
 export WAITSI_DB_SCHEMA="waitsi"                                     # optional namespace; recommended when sharing a DB
 ```
 
 ```bash
 npm start        # :3120 — backend + wait-surface at /
 npm run seed     # seed sponsor discovery catalog
-npm run smoke    # 71 tests: 12 pure unit tests + 59 integration (auth, payouts, vouchers,
+npm run smoke    # 64 tests: 12 pure unit tests + 52 integration (auth, payouts, vouchers,
                  # redemption, shop, streaks, attestation, multi-agent hub, sponsor ops)
 ```
 
