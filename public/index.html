@@ -239,6 +239,25 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px;
   .grid{gap:12px}
   .logfeed{max-height:96px;overflow:hidden}
 }
+/* ---- auth gate + navbar login (2026-09) ---- */
+.nav-auth{display:flex;align-items:center;gap:8px}
+.nav-auth button{border:0;border-radius:999px;padding:7px 14px;font-weight:700;font-size:12.5px;cursor:pointer;font-family:'General Sans',sans-serif}
+.nav-auth .login{background:var(--sprout);color:#08130a}
+.nav-auth .who{background:transparent;color:var(--text);border:1px solid var(--line);font-weight:600;cursor:default}
+.nav-auth .out{background:transparent;color:var(--text-2);border:1px solid var(--line);font-weight:600}
+#authGate{position:fixed;inset:0;z-index:99999;background:rgba(5,9,6,.82);backdrop-filter:blur(8px);display:grid;place-items:center;padding:24px}
+#authGate .panel{background:var(--ink-2);border:1px solid var(--line-2);border-radius:18px;padding:26px;width:100%;max-width:400px;position:relative;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+#authGate .cl{position:absolute;top:12px;right:16px;background:none;border:0;color:var(--text-3);font-size:22px;cursor:pointer;line-height:1}
+#authGate h3{font-weight:700;font-size:19px;margin-bottom:4px}
+#authGate .sub{color:var(--text-2);font-size:13px;margin-bottom:18px}
+#authGate label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-2);margin:0 0 5px}
+#authGate input{width:100%;background:var(--ink);border:1px solid var(--line);border-radius:10px;padding:11px;font-size:14px;color:var(--text);margin-bottom:12px;outline:none}
+#authGate input:focus{border-color:var(--sprout)}
+#authGate .ga-actions{display:flex;gap:10px}
+#authGate .ga-actions button{flex:1}
+#authGate .or{margin:15px 0 6px;font-size:11px;color:var(--text-3);text-align:center}
+#authGate .alt{display:block;text-align:center;color:var(--text);text-decoration:underline;text-underline-offset:3px;font-size:13px;cursor:pointer;background:none;border:0;width:100%;padding:6px}
+#authGate .ga-err{color:var(--danger);font-size:13px;min-height:18px;margin-top:6px}
 </style>
 </head>
 <body>
@@ -247,9 +266,32 @@ header{display:flex;align-items:center;justify-content:space-between;gap:12px;
     <div class="logo"><span class="dot"></span>WAITSI</div>
     <div style="display:flex;align-items:center;gap:10px">
       <span class="handle-chip" id="handleChip"></span>
+      <span class="nav-auth">
+        <button class="login" id="navAuth">Log in</button>
+      </span>
       <span class="hstatus" id="hstatus"><span class="pulse"></span><span id="hstatLabel">READY</span></span>
     </div>
   </header>
+
+  <!-- AUTH GATE — a paid wait requires a real account -->
+  <div id="authGate" class="hidden">
+    <div class="panel">
+      <button class="cl" id="authClose" aria-label="Close">×</button>
+      <h3 id="authType">Create an account</h3>
+      <p class="sub" id="authSub">Earnings attach to a real account. Create one — then your commons is yours.</p>
+      <label for="autHandle">Handle</label>
+      <input id="autHandle" autocomplete="username" placeholder="your-builder-handle" />
+      <label for="autPass">Password</label>
+      <input id="autPass" type="password" autocomplete="current-password" placeholder="at least 8 characters" />
+      <div class="ga-actions">
+        <button class="btn btn-primary" id="gaCreate">Create account</button>
+        <button class="btn btn-ghost" id="gaLogin">Log in</button>
+      </div>
+      <div class="or">or</div>
+      <button class="alt" id="gaAlt">Continue with Google or connect a wallet →</button>
+      <div class="ga-err" id="autErr"></div>
+    </div>
+  </div>
 
   <!-- ENTRY -->
   <section id="view-entry" class="stagger">
@@ -497,6 +539,9 @@ $('#btnLostBank').addEventListener('click', ()=>{ $('#connLost').classList.add('
 //   2. One-tap autostart: ?handle=&agent= — start a fresh paid wait instantly
 //        (paste-able demo link for judges: /?handle=judge&agent=your-agent)
 window.__linkedSession = false;
+// Auth-state holders — declared at top so the parse-time deep-link autostart
+// (applyDeepLink → startWait) can read them without a TDZ ReferenceError.
+let __me = null, authResolve = null;
 function applyDeepLink(){
   const q = new URLSearchParams(location.search);
   const handle = (q.get('handle')||'').trim();
@@ -577,7 +622,73 @@ function markBeat(){ lastBeat=Date.now(); }
 
 async function api(path,body){const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j;}
 
+// ---- auth gate: a paid wait requires a real account (2026-09) ----
+// (__me and authResolve are declared at the top of the script.)
+async function getMe(){
+  try{ const r = await fetch('/account/me'); if(!r.ok) return null; const j = await r.json(); return j.user || null; }catch{ return null; }
+}
+function paintAuth(user){
+  const b = document.getElementById('navAuth');
+  if(user){ b.textContent = '@'+user.handle; b.classList.add('who'); b.classList.remove('login'); b.onclick = () => logout(); }
+  else { b.textContent = 'Log in'; b.classList.remove('who'); b.classList.add('login'); b.onclick = openLogin; }
+}
+function openAuthGate(mode){
+  const t = document.getElementById('authType');
+  const s = document.getElementById('authSub');
+  if(mode==='login'){ t.textContent='Log in'; s.textContent='Welcome back — log in and keep growing your commons.'; }
+  else { t.textContent='Create an account'; s.textContent='Earnings attach to a real account. Create one — then your commons is yours.'; }
+  document.getElementById('autErr').textContent='';
+  document.getElementById('autHandle').value = document.getElementById('handle').value || '';
+  document.getElementById('autPass').value = '';
+  document.getElementById('authGate').classList.remove('hidden');
+  setTimeout(()=>{ const el=document.getElementById('autHandle'); if(el) el.focus(); }, 60);
+  return new Promise((res)=>{ authResolve = res; });
+}
+function closeAuthGate(){
+  document.getElementById('authGate').classList.add('hidden');
+  if(authResolve){ const r=authResolve; authResolve=null; r(null); }
+}
+async function authAction(kind){
+  const el=document.getElementById('autErr');
+  const handle=document.getElementById('autHandle').value.trim();
+  const pw=document.getElementById('autPass').value;
+  if(!handle||!pw){ el.textContent='handle and password required'; return; }
+  el.textContent='';
+  try{
+    const r=await fetch('/account/'+kind,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({handle,password:pw})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ el.textContent=j.error||('could not '+kind); return; }
+    __me=await getMe(); paintAuth(__me);
+    if(__me && __me.handle){ document.getElementById('handle').value=__me.handle; }
+    document.getElementById('authGate').classList.add('hidden');
+    if(authResolve){ const rr=authResolve; authResolve=null; rr(__me); }
+  }catch(e){ el.textContent=e.message; }
+}
+function openLogin(){ openAuthGate('login'); }
+async function logout(){
+  try{ await fetch('/account/logout',{method:'POST'}); }catch{}
+  __me=null; paintAuth(null); err(''); show('entry'); statusReady();
+}
+document.getElementById('navAuth').onclick = openLogin;
+document.getElementById('gaCreate').addEventListener('click', ()=> authAction('register'));
+document.getElementById('gaLogin').addEventListener('click', ()=> authAction('login'));
+document.getElementById('authClose').addEventListener('click', closeAuthGate);
+document.getElementById('authGate').addEventListener('click', (e)=>{ if(e.target===document.getElementById('authGate')) closeAuthGate(); });
+document.getElementById('gaAlt').addEventListener('click', ()=>{ window.location.href='/account'; });
+(async function(){ __me = await getMe(); paintAuth(__me); })();
+
 async function startWait(){
+  // Paid waits require a real account. CLI-attached sessions (?session=) are
+  // owned by a tool that already opened them — those skip the gate.
+  if(!window.__linkedSession){
+    __me = __me || await getMe();
+    if(!__me){
+      const u = await openAuthGate('login');
+      if(!u){ show('entry'); statusReady(); return; }
+      __me = u;
+    }
+    if(__me && __me.handle){ $('#handle').value = __me.handle; paintAuth(__me); }
+  }
   const handle=$('#handle').value.trim(), agent=$('#agentKey').value.trim();
   if(!handle){err('handle is required',true);return}
   err('',true);$('#btnStart').disabled=true; show('connecting'); statusLive('CONNECTING');
