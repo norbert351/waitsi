@@ -278,3 +278,52 @@ test('googleConfigured is false until both ID and secret are present', () => {
   if (wasId !== undefined) process.env.GOOGLE_CLIENT_ID = wasId;
   if (wasSecret !== undefined) process.env.GOOGLE_CLIENT_SECRET = wasSecret;
 });
+
+// ---- Wallet SIWE helpers (pure + real-key signature verify; no server) ----
+import {
+  normalizeAddress, buildSiwe, parseSiwe, verifyWalletSignature,
+  newNonce, walletClaimId, WALLET_CHAIN_ID,
+} from '../src/wallet.js';
+import { privateKeyToAccount } from 'viem/accounts';
+
+test('wallet address is checksum-normalized or rejected', () => {
+  assert.equal(normalizeAddress('0x' + 'fc934537410aded24076b3039a25c5e48e8a16a6'.toUpperCase()), '0xFC934537410AdEd24076b3039A25C5e48E8a16a6');
+  assert.equal(normalizeAddress('not-an-address'), null);
+});
+
+test('buildSiwe + parseSiwe round-trip the signed fields', () => {
+  const m = buildSiwe({ domain: 'waitsi-j9qk.onrender.com', address: '0xFC934537410AdEd24076b3039A25C5e48E8a16a6', nonce: 'abc123', uri: 'https://waitsi-j9qk.onrender.com/' });
+  const p = parseSiwe(m);
+  assert.equal(p['Version'], '1');
+  assert.equal(p['Nonce'], 'abc123');
+  assert.equal(p['Chain ID'], String(WALLET_CHAIN_ID));
+  assert.match(m, /0xFC934537410AdEd24076b3039A25C5e48E8a16a6/);
+});
+
+test('verifyWalletSignature accepts a real EIP-191 signature it can recover', async () => {
+  const account = privateKeyToAccount('0x' + 'a'.repeat(64));
+  const message = buildSiwe({ domain: 'd', address: account.address, nonce: 'n1', uri: 'https://d/' });
+  const signature = await account.signMessage({ message });
+  const v = await verifyWalletSignature({ address: account.address, message, signature });
+  assert.equal(v.ok, true);
+  assert.equal(v.address.toLowerCase(), account.address.toLowerCase());
+  assert.equal(v.nonce, 'n1');
+});
+
+test('verifyWalletSignature rejects a signature over a different message', async () => {
+  const account = privateKeyToAccount('0x' + 'b'.repeat(64));
+  const signed = await account.signMessage({ message: 'some other message entirely' });
+  const real = buildSiwe({ domain: 'd', address: account.address, nonce: 'n2', uri: 'https://d/' });
+  const v = await verifyWalletSignature({ address: account.address, message: real, signature: signed });
+  assert.equal(v.ok, false);
+});
+
+test('verifyWalletSignature rejects an address/format it cannot handle', async () => {
+  assert.equal((await verifyWalletSignature({ address: 'junk', message: 'x', signature: '0x' })).ok, false);
+  assert.equal((await verifyWalletSignature({ address: '0xFC934537410AdEd24076b3039A25C5e48E8a16a6', message: '', signature: '0x' })).ok, false);
+});
+
+test('nonce and wallet claim id have expected shapes', () => {
+  assert.match(newNonce(), /^[0-9a-f]{40}$/);
+  assert.match(walletClaimId('0xFC934537410AdEd24076b3039A25C5e48E8a16a6', 'hi'), /^0x[0-9a-f]{40}$/);
+});

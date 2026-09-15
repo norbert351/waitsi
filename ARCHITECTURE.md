@@ -128,6 +128,8 @@ solo-safe amplifiers, not core — removing them degrades depth but not the loop
 | `src/attest.js` | Server-truth attestation tiers (`sponsored`/`streamed`/`declared`) |
 | `src/db.js` | Postgres client, schema-qualified DDL/DDL, advisory-locked schema init |
 | `src/auth.js` | scrypt passwords, HttpOnly session cookies, saved-history isolation |
+| `src/google-oauth.js` | Google OAuth authorization-code flow (RS256 JWT verify, no deps) |
+| `src/wallet.js` | SIWE wallet sign-in + payout-wallet attachment (ECDSA verify via viem) |
 | `src/shop.js` | Coin-sink upgrades/cosmetics (guarded debit, price escalation) |
 | `src/spend.js` | Milestones/streaks/shields (the repeat hook), activity records |
 | `src/seed.js` | Idempotent sponsor catalog + demo-builder seeding |

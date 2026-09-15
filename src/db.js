@@ -256,7 +256,14 @@ export async function initSchema() {
   await q(`ALTER TABLE ${S}users ADD COLUMN IF NOT EXISTS password_salt TEXT`);
   await q(`ALTER TABLE ${S}users ADD COLUMN IF NOT EXISTS google_sub TEXT`);
   await q(`ALTER TABLE ${S}users ADD COLUMN IF NOT EXISTS email TEXT`);
+  await q(`ALTER TABLE ${S}users ADD COLUMN IF NOT EXISTS wallet_address TEXT`);
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS ${SCHEMA ? SCHEMA + '_' : ''}users_google_sub_uniq ON ${S}users (google_sub) WHERE google_sub IS NOT NULL`);
+  await q(`CREATE UNIQUE INDEX IF NOT EXISTS ${SCHEMA ? SCHEMA + '_' : ''}users_wallet_addr_uniq ON ${S}users (wallet_address) WHERE wallet_address IS NOT NULL`);
+  await q(`CREATE TABLE IF NOT EXISTS ${S}wallet_challenges (
+      nonce       TEXT PRIMARY KEY,
+      address     TEXT NOT NULL,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )`);
   await q(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS token TEXT`);
   await q(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS stream_banked INTEGER NOT NULL DEFAULT 0`);
   await q(`ALTER TABLE ${S}wait_sessions ADD COLUMN IF NOT EXISTS attested_tier TEXT`);
@@ -458,6 +465,57 @@ export async function upsertUserByGoogle(sub, handle, email) {
        WHERE ${S}users.google_sub IS NULL
      RETURNING id, handle`,
     [sub, handle, email],
+  );
+}
+
+// ---- Wallet identity (SIWE) ----
+export async function findUserByWallet(address) {
+  return one(`SELECT id, handle, wallet_address FROM ${S}users WHERE lower(wallet_address) = lower($1)`, [address]);
+}
+
+// Log in (or attach) with a wallet: create a user keyed by wallet_address, or
+// claim an existing non-wallet handle by binding the wallet so the world is
+// preserved. Null on a genuine conflict (wallet already bound elsewhere).
+export async function upsertUserByWallet(address, fallbackHandle) {
+  return one(
+    `INSERT INTO ${S}users (wallet_address, handle) VALUES ($1, $2)
+     ON CONFLICT (handle) DO UPDATE SET wallet_address = $1
+       WHERE ${S}users.wallet_address IS NULL
+     RETURNING id, handle, wallet_address`,
+    [address, fallbackHandle],
+  );
+}
+
+// Bind a wallet to a signed-in user; conflicts (another user owns it) → null.
+export async function setUserWallet(userId, address) {
+  return one(
+    `UPDATE ${S}users SET wallet_address = $2
+     WHERE id = $1 AND NOT EXISTS (
+       SELECT 1 FROM ${S}users o WHERE lower(o.wallet_address) = lower($2) AND o.id <> $1
+     )
+     RETURNING id, handle, wallet_address`,
+    [userId, address],
+  );
+}
+
+export async function getUserWallet(userId) {
+  const r = await one(`SELECT wallet_address FROM ${S}users WHERE id = $1`, [userId]);
+  return r ? r.wallet_address : null;
+}
+
+export async function createWalletChallenge(nonce, address) {
+  await one(`INSERT INTO ${S}wallet_challenges (nonce, address) VALUES ($1, $2) ON CONFLICT (nonce) DO NOTHING`, [nonce, address]);
+}
+
+// Consume a challenge (fresh + address-bound + single-use). Returns the row or
+// null if missing/expired/already used/wrong address.
+export async function consumeWalletChallenge(nonce, address, ttlMs) {
+  const ttlSec = Math.floor(ttlMs / 1000);
+  return one(
+    `DELETE FROM ${S}wallet_challenges
+     WHERE nonce = $1 AND lower(address) = lower($2) AND created_at > now() - make_interval(secs => $3)
+     RETURNING nonce, address`,
+    [nonce, address, ttlSec],
   );
 }
 

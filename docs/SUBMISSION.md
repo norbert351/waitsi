@@ -60,7 +60,7 @@ node bin/waitsi.mjs -- npm run build   # CLI-attached wait, banks + claims
 Tests:
 
 ```bash
-npm run smoke                         # unit + integration (69 tests)
+npm run smoke                         # unit + integration (75 tests)
 ```
 
 On-chain (Base Sepolia, 84532): USDC `0x036C…CF7e`, payTo `0x3360DA…F7C2`,
@@ -79,6 +79,7 @@ replay → budget seeded + on-chain receipt.
 | Admin routes guarded | ✅ | `/admin/*` → `admin token required` w/o Bearer |
 | Keep-alive through judging | ✅ | Render free-tier cron enabled (every 10 m) |
 | Google OAuth sign-in | ✅ implemented · **live-pending creds** | `src/google-oauth.js` (RS256 JWT verify, no deps); button + endpoints verified; needs `GOOGLE_CLIENT_SECRET` + authorized redirect URI to go live |
+| Wallet login (SIWE) + payout attach | ✅ verified end-to-end | `src/wallet.js`; live E2E with a real viem key (challenge→sign→login 200, nonce-replay 400, wrong-signature 400); /account/me returns the wallet |
 | Login-with-Commons (OIDC) | ⚠️ **Not integrated** | Auth-gated on Commons; creds pending — honest gap, not fake |
 
 ## Honest limits

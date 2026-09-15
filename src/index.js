@@ -31,6 +31,7 @@ import { makeVaultWriter } from './onchain.js';
 import * as auth from './auth.js';
 import { CATEGORIES } from './engine.js';
 import * as ggl from './google-oauth.js';
+import * as wallet from './wallet.js';
 
 const PORT = process.env.PORT || 3120;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -487,10 +488,51 @@ const server = createServer(async (req, res) => {
         clientId: ggl.GOOGLE_CLIENT_ID ? `${ggl.GOOGLE_CLIENT_ID.slice(0, 8)}…${ggl.GOOGLE_CLIENT_ID.slice(-4)}` : null,
       });
     }
+    // ---- Wallet identity (SIWE): issue a challenge to sign ----
+    if (method === 'POST' && path === '/wallet/challenge') {
+      const body = await readBody(req);
+      const address = wallet.normalizeAddress(body?.address);
+      if (!address) return json(res, 400, { error: 'valid wallet address required' });
+      const nonce = wallet.newNonce();
+      await db.createWalletChallenge(nonce, address);
+      const host = (req.headers?.host || '').split(',')[0].trim();
+      const uri = String(body?.uri || `https://${host}/`);
+      const message = wallet.buildSiwe({ domain: host, address, nonce, uri, statement: body?.statement });
+      return json(res, 201, { address, nonce, message, chainId: wallet.WALLET_CHAIN_ID, expiresInSeconds: Math.floor(wallet.TTL / 1000) });
+    }
+    // ---- Wallet login: verify the signed challenge and mint a session ----
+    if (method === 'POST' && path === '/wallet/login') {
+      const body = await readBody(req);
+      const v = await wallet.verifyWalletSignature({ address: body?.address, message: body?.message, signature: body?.signature });
+      if (!v.ok) return json(res, 400, { error: v.error });
+      const chall = await db.consumeWalletChallenge(v.nonce, v.address, wallet.TTL);
+      if (!chall) return json(res, 400, { error: 'nonce invalid, expired, or already used' });
+      const existing = await db.findUserByWallet(v.address);
+      let user = existing;
+      if (!user) user = await db.upsertUserByWallet(v.address, `w_${v.address.slice(2, 10).toLowerCase()}`);
+      if (!user) return json(res, 409, { error: 'wallet already bound to another account' });
+      const token = auth.newSessionToken();
+      await db.createSession(user.id, token, auth.sessionExpiry());
+      return jsonSetCookie(res, 200, { user: { id: user.id, handle: user.handle, wallet: user.wallet_address } }, auth.sessionCookie(token));
+    }
+    // ---- Attach a wallet to the signed-in account (payout destination) ----
+    if (method === 'POST' && path === '/account/wallet/attach') {
+      const me = await auth.fromRequest(req);
+      if (!me) return json(res, 401, { error: 'sign in to attach a wallet' });
+      const body = await readBody(req);
+      const v = await wallet.verifyWalletSignature({ address: body?.address, message: body?.message, signature: body?.signature });
+      if (!v.ok) return json(res, 400, { error: v.error });
+      const chall = await db.consumeWalletChallenge(v.nonce, v.address, wallet.TTL);
+      if (!chall) return json(res, 400, { error: 'nonce invalid, expired, or already used' });
+      const updated = await db.setUserWallet(me.id, v.address);
+      if (!updated) return json(res, 409, { error: 'wallet already attached to another account' });
+      return json(res, 200, { user: { id: updated.id, handle: updated.handle, wallet: updated.wallet_address } });
+    }
     if (method === 'GET' && path === '/account/me') {
       const me = await auth.fromRequest(req);
       if (!me) return json(res, 401, { error: 'not signed in' });
-      return json(res, 200, { user: { id: me.id, handle: me.handle }, savedViews: await db.listSavedViews(me.id) });
+      const walletAddr = await db.getUserWallet(me.id);
+      return json(res, 200, { user: { id: me.id, handle: me.handle, wallet: walletAddr }, savedViews: await db.listSavedViews(me.id) });
     }
     // Save results/history per user — the whole point of sign-in. Public to
     // read the dashboard; saving requires a session.

@@ -56,6 +56,7 @@
       </div>
       <div class="divider" style="margin-top:16px"><span>or</span></div>
       <a id="googlebtn" class="gbtn" href="/auth/google">Continue with Google</a>
+      <button id="walletbtn" class="ghost" style="margin-top:12px">Sign in with wallet</button>
       <div class="goerr" id="goerr" style="display:none"></div>
       <div class="msg" id="msg"></div>
     </div>
@@ -65,6 +66,11 @@
   <div id="signedin" class="hidden">
     <div class="card">
       <div><span class="pill" id="handlepill">—</span><span class="muted" id="uid"></span></div>
+      <div style="margin-top:14px">
+        <div class="muted" style="margin-bottom:6px">Wallet · payout destination</div>
+        <span class="pill" id="walletaddr" style="word-break:break-all">— not attached</span>
+        <button id="walletattach" class="ghost" style="margin-top:8px">Attach wallet</button>
+      </div>
       <div class="row" style="margin-top:14px">
         <button id="logout" class="ghost">Log out</button>
       </div>
@@ -98,6 +104,7 @@ function signedIn(user, views) {
   $('signedin').classList.remove('hidden');
   $('handlepill').textContent = '@' + user.handle;
   $('uid').textContent = '#' + user.id;
+  $('walletaddr').textContent = user.wallet || '— not attached';
   renderViews(views || []);
 }
 function renderViews(views) {
@@ -131,6 +138,38 @@ $('save').onclick = async () => {
   const r = await api('POST', '/api/saved', { label, summary: { at: new Date().toISOString(), source: 'account-page' } });
   if (r.status === 201) { $('savemsg').textContent = 'saved ✓'; $('savemsg').className = 'msg ok'; $('savelabel').value = ''; refresh(); }
   else { $('savemsg').textContent = r.body?.error || 'could not save'; $('savemsg').className = 'msg err'; }
+};
+
+// Wallet identity via injected provider (MetaMask et al.): SIWE challenge →
+// personal_sign → /wallet/login (server verifies the ECDSA signature + nonce).
+async function walletHandshake(path) {
+  if (!window.ethereum) {
+    $('goerr').style.display = 'block';
+    $('goerr').textContent = 'No wallet detected — install MetaMask or another injected provider to sign in with your wallet.';
+    return null;
+  }
+  $('goerr').style.display = 'none';
+  const [address] = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  const ch = await api('POST', '/wallet/challenge', { address });
+  if (ch.status !== 201) { $('goerr').style.display = 'block'; $('goerr').textContent = ch.body?.error || 'challenge failed'; return null; }
+  const message = ch.body.message;
+  const signature = await window.ethereum.request({ method: 'personal_sign', params: [message, address] });
+  return { address, message, signature };
+}
+$('walletbtn').onclick = async () => {
+  const payload = await walletHandshake();
+  if (!payload) return;
+  const r = await api('POST', '/wallet/login', payload);
+  if (r.status === 200) { await refresh(); }
+  else { $('goerr').style.display = 'block'; $('goerr').textContent = r.body?.error || 'wallet login failed'; }
+};
+$('walletattach').onclick = async () => {
+  const payload = await walletHandshake();
+  if (!payload) return;
+  const r = await api('POST', '/account/wallet/attach', payload);
+  const el = $('goerr');
+  if (r.status === 200) { await refresh(); }
+  else { el.style.display = 'block'; el.textContent = r.body?.error || 'attach failed'; }
 };
 
 refresh();

@@ -98,6 +98,25 @@ button hides and the endpoint answers `503 google_oauth_not_configured`. A
 `GET /auth/google/callback` with a mismatched/absent state is rejected `400`
 (CSRF).
 
+### Wallet identity (SIWE / EIP-4361)
+
+Sign-in with an injected wallet (MetaMask et al.) and wallet-attach for payouts:
+
+1. `POST /wallet/challenge {address}` → server stores a bound, **single-use
+   TTL nonce** (`wallet_challenges`) and returns the full EIP-4361 message to sign.
+2. The client `personal_sign`s that **exact** message.
+3. `POST /wallet/login {address, message, signature}` → server verifies (a) an
+   ECDSA `verifyMessage` (**`viem`, recovered off-chain**, no RPC) recovers to
+   `address`, (b) the SIWE `nonce` matches a fresh, address-bound, unused
+   challenge that is then consumed, (c) message version/fields, then creates/
+   claims the user via `users.wallet_address` (unique, partial index) and mints
+   the normal session cookie.
+
+`POST /account/wallet/attach` (requires a session) uses the same verifier to bind
+a wallet as the account's payout destination. Auth-gated; 401 when not signed in;
+409 when the wallet is already attached to another account. The whole module is
+`src/wallet.js` — no new dependencies.
+
 ---
 
 ## 5. On-chain (Base Sepolia, chain `84532`)
@@ -150,9 +169,9 @@ own auto-created schema and its own port so parallel files never collide;
 `test/harness.js` resolves the DB URL (env → `/tmp/wdb_url.txt`), forces
 IPv4-first DNS, and fails loudly with the real boot error.
 
-`test/units.test.js` (17 tests, ~140 ms, no server) covers level curve, clamp,
-split math, pricing, and the Google-OAuth pure helpers. The integration files
-cover auth, payouts/vouchers,
+`test/units.test.js` (23 tests, ~180 ms, no server) covers level curve, clamp,
+split math, pricing, and the Google-OAuth + wallet-SIWE pure helpers. The
+integration files cover auth, payouts/vouchers,
 redemption, shop, streaks, attestation tiers, multi-agent concurrency, sponsor
 ops, and the x402 loop.
 
