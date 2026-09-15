@@ -32,9 +32,11 @@ theme).
 
 Notes on the boxes:
 
-- **The wait-surface** (`public/index.html`, `public/vault.html`, `public/account.html`)
-  is a dependency-free, self-contained SPA—no build step—served by the same
-  backend. A judge opens `/` and it *is* the product.
+- **The wait-surface** (`public/index.html`) is a dependency-free, self-contained
+  SPA—no build step—served at **`/surface`**; the **marketing landing**
+  (`public/landing.html`, same brand) is served at **`/`**. A judge opens the
+  surface deep-link and it *is* the product; the landing funnels there.
+  (`public/vault.html` at `/vaults`, `public/account.html` at `/account`.)
 - **The SSE stream** (`src/service.js`) is the heartbeat of the waiting
   layer: one 1-second tick that banks elapsed second into the world *and*
   writes its ledger row in the same interval. Frame emission is decoupled
