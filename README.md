@@ -97,6 +97,9 @@ scene) + the sponsor card while an agent thinks → `POST /complete` → banked 
 terminal identity (see `design.md`). The marketing landing lives at `GET /`
 (`public/landing.html`).
 
+**Demo video** (live take of this flow): `https://waitsi-j9qk.onrender.com/demo/waitsi-demo.mp4`
+— landing → login → live wait → bank → claim → redeem → Vault → account → closure.
+
 ### v2 surfaces (each one backed a route that had no UI before)
 
 - **Multi-agent hub card** — subscribes to `GET /waits/hub` and lists every concurrent

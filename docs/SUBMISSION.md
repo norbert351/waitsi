@@ -35,6 +35,8 @@ payouts you claim and redeem are asset-backed, not a simulation.
 
 ## What judges can click (verification paths)
 
+- **Demo video (55s live take):** `https://waitsi-j9qk.onrender.com/demo/waitsi-demo.mp4`
+  — landing → login → live wait → bank → claim → redeem → Vault → account → closure.
 - **The product:** `https://waitsi-j9qk.onrender.com/surface?handle=judge&agent=your-agent`
   — one-tap autostart (a first-time visitor creates a free account first, ~10s,
   then the wait starts live).
