@@ -155,7 +155,9 @@ as production data does — nothing is faked, and their payouts are real voucher
 The surface is a *layer over any wait*, so it can attach itself with no clicks:
 
 - **One-tap autostart** — `/surface?handle=<you>&agent=<tool>` starts a fresh paid wait
-  instantly (paste this to a judge: `https://waitsi-j9qk.onrender.com/surface?handle=judge&agent=your-agent`).
+  instantly once you're signed in. First-time visitors get a quick create-account
+  prompt (one step), then the wait fires. Paste to a judge:
+  `https://waitsi-j9qk.onrender.com/surface?handle=judge&agent=your-agent`.
 - **CLI-attached** — a `waitsi` CLI/agent tool already opened the session
   (`POST /waits/start`) and hands the surface `?handle=&agent=&session=&token=`;
   the page attaches to the live SSE stream and the tool settles on exit.

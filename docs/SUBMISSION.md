@@ -36,7 +36,8 @@ payouts you claim and redeem are asset-backed, not a simulation.
 ## What judges can click (verification paths)
 
 - **The product:** `https://waitsi-j9qk.onrender.com/surface?handle=judge&agent=your-agent`
-  — one-tap autostart of a real waiting session.
+  — one-tap autostart (a first-time visitor creates a free account first, ~10s,
+  then the wait starts live).
 - **The Vault (on-chain):** `https://waitsi-j9qk.onrender.com/vaults`
 - **The leaderboard (public "$CMNS Vault"):**
   `https://waitsi-j9qk.onrender.com/leaderboard?limit=10`
